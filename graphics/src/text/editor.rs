@@ -448,12 +448,37 @@ impl editor::Editor for Editor {
                     }
                 }
                 Action::Scroll { lines } => {
+                    let buffer = buffer_from_editor(editor);
+                    let line_height = buffer.metrics().line_height;
+                    let buffer_height = buffer.size().1.unwrap_or(0.0);
+
+                    // Calculate total content height
+                    let total_lines: usize = buffer
+                        .lines
+                        .iter()
+                        .map(|line| line.layout_opt().map(|l| l.len()).unwrap_or(1))
+                        .sum();
+                    let total_content_height = total_lines as f32 * line_height;
+
+                    // Calculate maximum scroll offset
+                    let max_scroll = (total_content_height - buffer_height).max(0.0);
+
                     editor.action(
                         font_system.raw(),
                         cosmic_text::Action::Scroll {
-                            pixels: lines as f32 * buffer_from_editor(editor).metrics().line_height,
+                            pixels: lines as f32 * line_height,
                         },
                     );
+
+                    // Clamp scroll to valid bounds (cosmic_text doesn't do this)
+                    let buffer_mut = buffer_mut_from_editor(editor);
+                    let mut scroll_after = buffer_mut.scroll();
+                    let clamped_vertical = scroll_after.vertical.clamp(0.0, max_scroll);
+
+                    if (scroll_after.vertical - clamped_vertical).abs() > 0.001 {
+                        scroll_after.vertical = clamped_vertical;
+                        buffer_mut.set_scroll(scroll_after);
+                    }
                 }
             }
         });
@@ -778,8 +803,6 @@ fn highlight_line(
 
         if range.is_empty() {
             (0.0, 0.0)
-        } else if range.start == start && range.end == end {
-            (0.0, visual_line.w)
         } else {
             let first_glyph = visual_line
                 .glyphs

@@ -1228,10 +1228,13 @@ impl<Message> Update<Message> {
                 mouse::Event::ButtonReleased(mouse::Button::Left) => Some(Update::Release),
                 mouse::Event::CursorMoved { .. } => match state.drag_click {
                     Some(mouse::click::Kind::Single) => {
-                        let cursor_position =
-                            cursor.position_in(bounds)? - Vector::new(padding.left, padding.top);
+                        let cursor_position = cursor.position()?;
+                        let relative_position = Point::new(
+                            (cursor_position.x - bounds.x).max(0.0).min(bounds.width),
+                            (cursor_position.y - bounds.y).max(0.0).min(bounds.height),
+                        ) - Vector::new(padding.left, padding.top);
 
-                        Some(Update::Drag(cursor_position))
+                        Some(Update::Drag(relative_position))
                     }
                     _ => None,
                 },
