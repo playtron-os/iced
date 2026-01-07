@@ -935,11 +935,20 @@ where
                 );
             }
         } else {
+            // Extend clip bounds slightly to account for glyph overhang - some characters
+            // can extend past their advance width
+            let text_size = self.text_size.unwrap_or_else(|| renderer.default_size());
+            let glyph_overhang = f32::from(text_size) * 0.15;
+            let clip_bounds = Rectangle {
+                width: text_bounds.width + glyph_overhang,
+                ..text_bounds
+            };
+
             renderer.fill_editor(
                 &internal.editor,
                 text_bounds.position(),
                 style.value,
-                text_bounds,
+                clip_bounds,
             );
         }
 
