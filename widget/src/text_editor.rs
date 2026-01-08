@@ -936,11 +936,13 @@ where
             }
         } else {
             // Extend clip bounds slightly to account for glyph overhang - some characters
-            // can extend past their advance width
+            // can extend past their advance width and below the baseline (descenders)
             let text_size = self.text_size.unwrap_or_else(|| renderer.default_size());
             let glyph_overhang = f32::from(text_size) * 0.15;
+            let descender_overhang = f32::from(text_size) * 0.25;
             let clip_bounds = Rectangle {
                 width: text_bounds.width + glyph_overhang,
+                height: text_bounds.height + descender_overhang,
                 ..text_bounds
             };
 
