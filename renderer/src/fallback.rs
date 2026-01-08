@@ -70,6 +70,24 @@ where
         delegate!(self, renderer, renderer.end_opacity());
     }
 
+    fn start_gradient_fade(
+        &mut self,
+        bounds: Rectangle,
+        direction: u8,
+        fade_start: f32,
+        fade_end: f32,
+    ) {
+        delegate!(
+            self,
+            renderer,
+            renderer.start_gradient_fade(bounds, direction, fade_start, fade_end)
+        );
+    }
+
+    fn end_gradient_fade(&mut self) {
+        delegate!(self, renderer, renderer.end_gradient_fade());
+    }
+
     fn allocate_image(
         &mut self,
         handle: &image::Handle,

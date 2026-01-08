@@ -262,6 +262,24 @@ impl core::Renderer for Renderer {
         }
     }
 
+    // Gradient fade in tiny_skia falls back to rendering content at full opacity.
+    // The gradient fade effect requires offscreen rendering and compositing which
+    // is not practical in tiny_skia's immediate-mode software rendering approach.
+    // Content will render normally without the gradient transparency effect.
+    fn start_gradient_fade(
+        &mut self,
+        _bounds: Rectangle,
+        _direction: u8,
+        _fade_start: f32,
+        _fade_end: f32,
+    ) {
+        // No-op: content renders at full opacity
+    }
+
+    fn end_gradient_fade(&mut self) {
+        // No-op
+    }
+
     fn fill_quad(&mut self, quad: renderer::Quad, background: impl Into<Background>) {
         let (background, quad) = apply_opacity(self.current_opacity(), background, quad);
         let (layer, transformation) = self.layers.current_mut();

@@ -265,5 +265,3 @@ useless_conversion = "deny"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "forbid"
-[patch."https://github.com/pop-os/cosmic-text.git"]
-cosmic-text = { path = "../cosmic-text" }

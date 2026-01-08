@@ -11,6 +11,7 @@ pub use core::widget::Id;
 
 mod action;
 mod column;
+mod gradient_fade;
 mod mouse_area;
 mod opacity;
 mod pin;
@@ -66,6 +67,8 @@ pub use combo_box::ComboBox;
 pub use container::Container;
 #[doc(no_inline)]
 pub use float::Float;
+#[doc(no_inline)]
+pub use gradient_fade::{FadeEdge, GradientFade, gradient_fade};
 #[doc(no_inline)]
 pub use grid::Grid;
 #[doc(no_inline)]

@@ -1,0 +1,22 @@
+[package]
+name = "gradient_fade_widget"
+version = "0.1.0"
+authors = ["Ericky Dos Santos"]
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "gradient_fade_widget"
+path = "src/main.rs"
+
+[dependencies]
+iced.workspace = true
+iced.features = ["debug", "svg", "image"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing-subscriber = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+iced.workspace = true
+iced.features = ["debug", "webgl", "fira-sans", "svg", "image"]
+console_error_panic_hook = "0.1"

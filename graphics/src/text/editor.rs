@@ -456,7 +456,7 @@ impl editor::Editor for Editor {
                     let total_lines: usize = buffer
                         .lines
                         .iter()
-                        .map(|line| line.layout_opt().map(|l| l.len()).unwrap_or(1))
+                        .map(|line| line.layout_opt().map(Vec::len).unwrap_or(1))
                         .sum();
                     let total_content_height = total_lines as f32 * line_height;
 

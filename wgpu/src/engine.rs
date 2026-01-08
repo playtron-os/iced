@@ -1,3 +1,4 @@
+use crate::gradient_fade;
 use crate::graphics::{Antialiasing, Shell};
 use crate::primitive;
 use crate::quad;
@@ -17,6 +18,7 @@ pub struct Engine {
     pub(crate) triangle_pipeline: triangle::Pipeline,
     #[cfg(any(feature = "image", feature = "svg"))]
     pub(crate) image_pipeline: crate::image::Pipeline,
+    pub(crate) gradient_fade_pipeline: gradient_fade::Pipeline,
     pub(crate) primitive_storage: Arc<RwLock<primitive::Storage>>,
     _shell: Shell,
 }
@@ -44,6 +46,7 @@ impl Engine {
                 crate::image::Pipeline::new(&device, format, backend)
             },
 
+            gradient_fade_pipeline: gradient_fade::Pipeline::new(&device, format),
             primitive_storage: Arc::new(RwLock::new(primitive::Storage::default())),
 
             device,

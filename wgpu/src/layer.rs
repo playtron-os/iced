@@ -359,6 +359,7 @@ impl graphics::Layer for Layer {
 }
 
 impl Default for Layer {
+    #[allow(clippy::default_constructed_unit_structs)]
     fn default() -> Self {
         Self {
             bounds: Rectangle::INFINITE,

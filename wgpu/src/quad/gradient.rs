@@ -81,18 +81,7 @@ impl Pipeline {
         #[cfg(not(target_arch = "wasm32"))]
         let gradient_shader = include_str!("../shader/quad/gradient.wgsl");
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("iced_wgpu.quad.gradient.shader"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(concat!(
-                include_str!("../shader/quad.wgsl"),
-                "\n",
-                include_str!("../shader/vertex.wgsl"),
-                "\n",
-                // Placeholder - we'll use format! instead
-            ))),
-        });
-
-        // Actually create the shader with the right gradient file
+        // Create the shader with the right gradient file
         let shader_source = format!(
             "{}\n{}\n{}\n{}\n{}",
             include_str!("../shader/quad.wgsl"),

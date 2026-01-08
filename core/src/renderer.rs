@@ -74,6 +74,49 @@ pub trait Renderer {
         self.end_opacity();
     }
 
+    /// Starts recording a gradient fade effect.
+    ///
+    /// All primitives drawn until [`end_gradient_fade`](Self::end_gradient_fade) is called
+    /// will be rendered to an offscreen texture and then composited with a gradient
+    /// alpha mask for fade effects.
+    ///
+    /// # Arguments
+    /// * `bounds` - The area where the gradient fade applies
+    /// * `direction` - The direction of the fade (0=TopToBottom, 1=BottomToTop, 2=LeftToRight, 3=RightToLeft)
+    /// * `fade_start` - Where the fade begins (0.0 to 1.0, relative to bounds)
+    /// * `fade_end` - Where the fade ends (0.0 to 1.0, relative to bounds)
+    fn start_gradient_fade(
+        &mut self,
+        _bounds: Rectangle,
+        _direction: u8,
+        _fade_start: f32,
+        _fade_end: f32,
+    ) {
+    }
+
+    /// Ends recording the current gradient fade effect.
+    ///
+    /// The contents will be composited with the gradient alpha mask specified in
+    /// [`start_gradient_fade`](Self::start_gradient_fade).
+    fn end_gradient_fade(&mut self) {}
+
+    /// Draws the primitives recorded in the given closure with a gradient fade effect.
+    ///
+    /// The primitives will be rendered to an offscreen texture and then composited
+    /// with a gradient alpha mask.
+    fn with_gradient_fade(
+        &mut self,
+        bounds: Rectangle,
+        direction: u8,
+        fade_start: f32,
+        fade_end: f32,
+        f: impl FnOnce(&mut Self),
+    ) {
+        self.start_gradient_fade(bounds, direction, fade_start, fade_end);
+        f(self);
+        self.end_gradient_fade();
+    }
+
     /// Fills a [`Quad`] with the provided [`Background`].
     fn fill_quad(&mut self, quad: Quad, background: impl Into<Background>);
 
