@@ -914,13 +914,24 @@ where
 
         let text_bounds = bounds.shrink(self.padding);
 
+        // Extend clip bounds slightly to account for glyph overhang - some characters
+        // can extend past their advance width and below the baseline (descenders)
+        let text_size = self.text_size.unwrap_or_else(|| renderer.default_size());
+        let glyph_overhang = f32::from(text_size) * 0.15;
+        let descender_overhang = f32::from(text_size) * 0.25;
+        let clip_bounds = Rectangle {
+            width: text_bounds.width + glyph_overhang,
+            height: text_bounds.height + descender_overhang,
+            ..text_bounds
+        };
+
         if internal.editor.is_empty() {
             if let Some(placeholder) = self.placeholder.clone() {
                 renderer.fill_text(
                     Text {
                         content: placeholder.into_owned(),
                         bounds: text_bounds.size(),
-                        size: self.text_size.unwrap_or_else(|| renderer.default_size()),
+                        size: text_size,
                         line_height: self.line_height,
                         font,
                         align_x: text::Alignment::Default,
@@ -931,21 +942,10 @@ where
                     },
                     text_bounds.position(),
                     style.placeholder,
-                    text_bounds,
+                    clip_bounds,
                 );
             }
         } else {
-            // Extend clip bounds slightly to account for glyph overhang - some characters
-            // can extend past their advance width and below the baseline (descenders)
-            let text_size = self.text_size.unwrap_or_else(|| renderer.default_size());
-            let glyph_overhang = f32::from(text_size) * 0.15;
-            let descender_overhang = f32::from(text_size) * 0.25;
-            let clip_bounds = Rectangle {
-                width: text_bounds.width + glyph_overhang,
-                height: text_bounds.height + descender_overhang,
-                ..text_bounds
-            };
-
             renderer.fill_editor(
                 &internal.editor,
                 text_bounds.position(),
