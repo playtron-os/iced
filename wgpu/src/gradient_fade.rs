@@ -340,10 +340,6 @@ impl State {
 
     /// Starts a new gradient fade effect, recording the current layer count.
     pub fn start(&mut self, fade: GradientFade, current_layer_count: usize) {
-        eprintln!(
-            "[gradient_fade::State::start] starting fade at layer {}",
-            current_layer_count
-        );
         self.active = Some(ActiveFade {
             fade,
             start_layer: current_layer_count,
@@ -363,10 +359,6 @@ impl State {
                 start_layer: active.start_layer,
                 end_layer: current_layer_count,
             };
-            eprintln!(
-                "[gradient_fade::State::end] ending fade, layers {}..{}",
-                region.start_layer, region.end_layer
-            );
             self.completed_regions.push(region.clone());
             Some(region)
         } else {
