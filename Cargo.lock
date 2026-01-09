@@ -604,6 +604,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43"
 
 [[package]]
+name = "button_icon_label"
+version = "0.1.0"
+dependencies = [
+ "iced",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "by_address"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1053,7 +1061,7 @@ dependencies = [
 [[package]]
 name = "cosmic-text"
 version = "0.16.0"
-source = "git+https://github.com/playtron-os/cosmic-text.git?rev=3757357#3757357a64343c91c6ec3c4e6c55f878e8327af7"
+source = "git+https://github.com/playtron-os/cosmic-text.git?rev=e07f8b6#e07f8b610b5b190a6c4434431472a2224cecb0b1"
 dependencies = [
  "bitflags 2.10.0",
  "fontdb",
@@ -1169,7 +1177,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "cryoglyph"
 version = "0.1.0"
-source = "git+https://github.com/playtron-os/cryoglyph.git?rev=f6f0333#f6f0333e8740be407f5f2c82fd7ba43d1381506b"
+source = "git+https://github.com/playtron-os/cryoglyph.git?rev=cd69a72#cd69a72a06371241cd80b3295cddcc643e918e25"
 dependencies = [
  "cosmic-text",
  "etagere",
@@ -4779,6 +4787,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "reasoning_input"
+version = "0.1.0"
+dependencies = [
+ "iced",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5802,6 +5817,14 @@ name = "text"
 version = "0.1.0"
 dependencies = [
  "iced",
+]
+
+[[package]]
+name = "text_centering"
+version = "0.1.0"
+dependencies = [
+ "iced",
+ "tracing-subscriber",
 ]
 
 [[package]]
