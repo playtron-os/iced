@@ -604,14 +604,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43"
 
 [[package]]
-name = "button_icon_label"
-version = "0.1.0"
-dependencies = [
- "iced",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "by_address"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4787,13 +4779,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "reasoning_input"
-version = "0.1.0"
-dependencies = [
- "iced",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5817,14 +5802,6 @@ name = "text"
 version = "0.1.0"
 dependencies = [
  "iced",
-]
-
-[[package]]
-name = "text_centering"
-version = "0.1.0"
-dependencies = [
- "iced",
- "tracing-subscriber",
 ]
 
 [[package]]

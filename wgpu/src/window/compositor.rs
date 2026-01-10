@@ -102,13 +102,31 @@ impl Compositor {
 
                 log::info!("Available formats: {formats:#?}");
 
-                let mut formats =
-                    formats.filter(|format| format.required_features() == wgpu::Features::empty());
+                let formats_vec: Vec<_> =
+                    formats.filter(|format| format.required_features() == wgpu::Features::empty()).collect();
 
+                log::info!("Filtered formats (no special features): {formats_vec:#?}");
+
+                // TODO: Explore how to make this better on AMD
+                // Prefer 8-bit sRGB formats over 10-bit HDR for better alpha blending compatibility
+                // especially on AMD GPUs where Rgb10a2Unorm can cause visual artifacts
                 let format = if color::GAMMA_CORRECTION {
-                    formats.find(wgpu::TextureFormat::is_srgb)
+                    // First try 8-bit sRGB formats explicitly
+                    formats_vec.iter().copied().find(|f| matches!(f,
+                        wgpu::TextureFormat::Bgra8UnormSrgb |
+                        wgpu::TextureFormat::Rgba8UnormSrgb
+                    )).or_else(|| {
+                        // Fall back to any sRGB format
+                        formats_vec.iter().copied().find(|f| wgpu::TextureFormat::is_srgb(f))
+                    })
                 } else {
-                    formats.find(|format| !wgpu::TextureFormat::is_srgb(format))
+                    // For non-gamma-corrected, prefer 8-bit over 10-bit
+                    formats_vec.iter().copied().find(|f| matches!(f,
+                        wgpu::TextureFormat::Bgra8Unorm |
+                        wgpu::TextureFormat::Rgba8Unorm
+                    )).or_else(|| {
+                        formats_vec.iter().copied().find(|f| !wgpu::TextureFormat::is_srgb(f))
+                    })
                 };
 
                 let format = format.or_else(|| {
