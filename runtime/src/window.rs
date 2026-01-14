@@ -48,6 +48,11 @@ pub enum Action {
     /// Parameters are (id, width, height, duration_ms).
     AnimatedResize(Id, u32, u32, u32),
 
+    /// Resize the window with animation and explicit position (COSMIC compositor protocol).
+    /// Parameters are (id, x, y, width, height, duration_ms).
+    /// If the window is maximized, the position and size will be stored and used when restored.
+    AnimatedResizeWithPosition(Id, i32, i32, u32, u32, u32),
+
     /// Get the current logical dimensions of the window.
     GetSize(Id, oneshot::Sender<Size>),
 
@@ -322,6 +327,35 @@ pub fn resize<T>(id: Id, new_size: Size) -> Task<T> {
 pub fn animated_resize<T>(id: Id, width: u32, height: u32, duration_ms: u32) -> Task<T> {
     task::effect(crate::Action::Window(Action::AnimatedResize(
         id,
+        width,
+        height,
+        duration_ms,
+    )))
+}
+
+/// Resizes the window with animation and explicit position using the COSMIC animated resize protocol.
+///
+/// This requests the compositor to smoothly animate the window from its current
+/// geometry to the target position and size over the specified duration.
+///
+/// If the window is maximized, the position and size will be stored and used
+/// when the window is restored to normal state.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_animated_resize_v1` protocol.
+/// - **Other platforms:** Falls back to instant resize (position ignored).
+pub fn animated_resize_with_position<T>(
+    id: Id,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    duration_ms: u32,
+) -> Task<T> {
+    task::effect(crate::Action::Window(Action::AnimatedResizeWithPosition(
+        id,
+        x,
+        y,
         width,
         height,
         duration_ms,

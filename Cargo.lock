@@ -1348,7 +1348,7 @@ dependencies = [
 [[package]]
 name = "dpi"
 version = "0.1.1"
-source = "git+https://github.com/playtron-os/winit.git?rev=232843b9#232843b9d79a00e75adebc23d3b8e615562ba53a"
+source = "git+https://github.com/playtron-os/winit.git?rev=1c2d3849#1c2d3849f21a77e58e1bbd913de200ee94af2721"
 
 [[package]]
 name = "editor"
@@ -3240,6 +3240,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
+]
+
+[[package]]
+name = "maximize_test"
+version = "0.1.0"
+dependencies = [
+ "iced",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -7560,7 +7568,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.30.12"
-source = "git+https://github.com/playtron-os/winit.git?rev=232843b9#232843b9d79a00e75adebc23d3b8e615562ba53a"
+source = "git+https://github.com/playtron-os/winit.git?rev=1c2d3849#1c2d3849f21a77e58e1bbd913de200ee94af2721"
 dependencies = [
  "ahash",
  "android-activity",
