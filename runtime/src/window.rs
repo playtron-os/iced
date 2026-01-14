@@ -44,6 +44,10 @@ pub enum Action {
     /// Resize the window to the given logical dimensions.
     Resize(Id, Size),
 
+    /// Resize the window with animation (COSMIC compositor protocol).
+    /// Parameters are (id, width, height, duration_ms).
+    AnimatedResize(Id, u32, u32, u32),
+
     /// Get the current logical dimensions of the window.
     GetSize(Id, oneshot::Sender<Size>),
 
@@ -305,6 +309,23 @@ pub fn drag_resize<T>(id: Id, direction: Direction) -> Task<T> {
 /// Resizes the window to the given logical dimensions.
 pub fn resize<T>(id: Id, new_size: Size) -> Task<T> {
     task::effect(crate::Action::Window(Action::Resize(id, new_size)))
+}
+
+/// Resizes the window with animation using the COSMIC animated resize protocol.
+///
+/// This requests the compositor to smoothly animate the window from its current
+/// size to the target size over the specified duration.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_animated_resize_v1` protocol.
+/// - **Other platforms:** Falls back to instant resize.
+pub fn animated_resize<T>(id: Id, width: u32, height: u32, duration_ms: u32) -> Task<T> {
+    task::effect(crate::Action::Window(Action::AnimatedResize(
+        id,
+        width,
+        height,
+        duration_ms,
+    )))
 }
 
 /// Set the window to be resizable or not.

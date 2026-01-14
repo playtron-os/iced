@@ -1352,6 +1352,48 @@ fn run_action<'a, P, C>(
                     );
                 }
             }
+            window::Action::AnimatedResize(id, width, height, duration_ms) => {
+                if let Some(window) = window_manager.get_mut(id) {
+                    #[cfg(all(
+                        feature = "wayland",
+                        any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        )
+                    ))]
+                    {
+                        use winit::platform::wayland::WindowExtWayland;
+                        let _ = window.raw.request_animated_resize(
+                            width as i32,
+                            height as i32,
+                            duration_ms,
+                        );
+                    }
+                    #[cfg(not(all(
+                        feature = "wayland",
+                        any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        )
+                    )))]
+                    {
+                        // Fall back to instant resize on non-Wayland platforms
+                        let _ = window.raw.request_inner_size(
+                            winit::dpi::LogicalSize {
+                                width: width as f32,
+                                height: height as f32,
+                            }
+                            .to_physical::<f32>(f64::from(window.state.scale_factor())),
+                        );
+                    }
+                }
+            }
             window::Action::SetMinSize(id, size) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.set_min_inner_size(size.map(|size| {
