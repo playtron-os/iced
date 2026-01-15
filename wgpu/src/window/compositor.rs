@@ -102,8 +102,9 @@ impl Compositor {
 
                 log::info!("Available formats: {formats:#?}");
 
-                let formats_vec: Vec<_> =
-                    formats.filter(|format| format.required_features() == wgpu::Features::empty()).collect();
+                let formats_vec: Vec<_> = formats
+                    .filter(|format| format.required_features() == wgpu::Features::empty())
+                    .collect();
 
                 log::info!("Filtered formats (no special features): {formats_vec:#?}");
 
@@ -112,21 +113,40 @@ impl Compositor {
                 // especially on AMD GPUs where Rgb10a2Unorm can cause visual artifacts
                 let format = if color::GAMMA_CORRECTION {
                     // First try 8-bit sRGB formats explicitly
-                    formats_vec.iter().copied().find(|f| matches!(f,
-                        wgpu::TextureFormat::Bgra8UnormSrgb |
-                        wgpu::TextureFormat::Rgba8UnormSrgb
-                    )).or_else(|| {
-                        // Fall back to any sRGB format
-                        formats_vec.iter().copied().find(|f| wgpu::TextureFormat::is_srgb(f))
-                    })
+                    formats_vec
+                        .iter()
+                        .copied()
+                        .find(|f| {
+                            matches!(
+                                f,
+                                wgpu::TextureFormat::Bgra8UnormSrgb
+                                    | wgpu::TextureFormat::Rgba8UnormSrgb
+                            )
+                        })
+                        .or_else(|| {
+                            // Fall back to any sRGB format
+                            formats_vec
+                                .iter()
+                                .copied()
+                                .find(wgpu::TextureFormat::is_srgb)
+                        })
                 } else {
                     // For non-gamma-corrected, prefer 8-bit over 10-bit
-                    formats_vec.iter().copied().find(|f| matches!(f,
-                        wgpu::TextureFormat::Bgra8Unorm |
-                        wgpu::TextureFormat::Rgba8Unorm
-                    )).or_else(|| {
-                        formats_vec.iter().copied().find(|f| !wgpu::TextureFormat::is_srgb(f))
-                    })
+                    formats_vec
+                        .iter()
+                        .copied()
+                        .find(|f| {
+                            matches!(
+                                f,
+                                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
+                            )
+                        })
+                        .or_else(|| {
+                            formats_vec
+                                .iter()
+                                .copied()
+                                .find(wgpu::TextureFormat::is_srgb)
+                        })
                 };
 
                 let format = format.or_else(|| {
