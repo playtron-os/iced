@@ -53,6 +53,42 @@ pub enum Action {
     /// If the window is maximized, the position and size will be stored and used when restored.
     AnimatedResizeWithPosition(Id, i32, i32, u32, u32, u32),
 
+    /// Embed a toplevel by process ID into the window's surface (COSMIC compositor protocol).
+    /// Parameters are (window_id, pid, app_id, x, y, width, height, interactive, result_sender).
+    /// Returns the embed ID via the sender, or None if the protocol is not available.
+    EmbedToplevelByPid(
+        Id,
+        u32,
+        String,
+        i32,
+        i32,
+        i32,
+        i32,
+        bool,
+        oneshot::Sender<Option<u64>>,
+    ),
+
+    /// Update the geometry of an embedded surface (COSMIC compositor protocol).
+    /// Parameters are (window_id, embed_id, x, y, width, height).
+    SetEmbedGeometry(Id, u64, i32, i32, i32, i32),
+
+    /// Set anchor-based positioning for an embedded surface (COSMIC compositor protocol).
+    /// Parameters are (window_id, embed_id, anchor, margin_top, margin_right, margin_bottom, margin_left, width, height).
+    /// Anchor is a bitfield: 0=none, 1=top, 2=bottom, 4=left, 8=right.
+    SetEmbedAnchor(Id, u64, u32, i32, i32, i32, i32, i32, i32),
+
+    /// Set corner radius for an embedded surface (COSMIC compositor protocol).
+    /// Parameters are (window_id, embed_id, top_left, top_right, bottom_right, bottom_left).
+    SetEmbedCornerRadius(Id, u64, u32, u32, u32, u32),
+
+    /// Set interactivity for an embedded surface (COSMIC compositor protocol).
+    /// Parameters are (window_id, embed_id, interactive).
+    SetEmbedInteractive(Id, u64, bool),
+
+    /// Remove an embedded surface (COSMIC compositor protocol).
+    /// Parameters are (window_id, embed_id).
+    RemoveEmbed(Id, u64),
+
     /// Get the current logical dimensions of the window.
     GetSize(Id, oneshot::Sender<Size>),
 
@@ -360,6 +396,176 @@ pub fn animated_resize_with_position<T>(
         height,
         duration_ms,
     )))
+}
+
+/// Embed a toplevel by process ID into this window's surface.
+///
+/// This uses the `zcosmic_surface_embed_manager_v1` protocol to embed a
+/// foreign toplevel window within this window's surface. The compositor
+/// will monitor for new toplevels from the specified PID and embed the
+/// first matching one.
+///
+/// Returns a [`Task`] that resolves to the embed ID (which can be used to
+/// update geometry or remove the embed), or `None` if the protocol is not
+/// available.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_surface_embed_manager_v1` protocol.
+/// - **Other platforms:** Always returns `None`.
+///
+/// # Arguments
+/// * `id` - Window ID to embed into
+/// * `pid` - Process ID of the application to embed
+/// * `app_id` - Optional app_id hint for verification (can be empty)
+/// * `x` - X position within this window's surface
+/// * `y` - Y position within this window's surface
+/// * `width` - Width of the embed region
+/// * `height` - Height of the embed region
+/// * `interactive` - Whether input should be routed to the embedded surface
+#[allow(clippy::too_many_arguments)]
+pub fn embed_toplevel_by_pid(
+    id: Id,
+    pid: u32,
+    app_id: impl Into<String>,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    interactive: bool,
+) -> Task<Option<u64>> {
+    task::oneshot(move |channel| {
+        crate::Action::Window(Action::EmbedToplevelByPid(
+            id,
+            pid,
+            app_id.into(),
+            x,
+            y,
+            width,
+            height,
+            interactive,
+            channel,
+        ))
+    })
+}
+
+/// Update the geometry of an embedded surface.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_surface_embed_manager_v1` protocol.
+/// - **Other platforms:** No-op.
+pub fn set_embed_geometry<T>(
+    id: Id,
+    embed_id: u64,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetEmbedGeometry(
+        id, embed_id, x, y, width, height,
+    )))
+}
+
+/// Set anchor-based positioning for an embedded surface.
+///
+/// Instead of specifying absolute (x, y) coordinates, this allows
+/// positioning relative to the parent window edges. The geometry is
+/// automatically recalculated by the compositor when the parent window resizes.
+///
+/// # Arguments
+/// * `id` - The parent window ID
+/// * `embed_id` - The embedded surface ID
+/// * `anchor` - Bitflags indicating which edges to anchor to:
+///   - 0: none (use absolute positioning)
+///   - 1: top
+///   - 2: bottom
+///   - 4: left
+///   - 8: right
+///   - Combinations like 9 (top | right) are valid
+/// * `margin_top` - Margin from top edge (when anchored to top)
+/// * `margin_right` - Margin from right edge (when anchored to right)
+/// * `margin_bottom` - Margin from bottom edge (when anchored to bottom)
+/// * `margin_left` - Margin from left edge (when anchored to left)
+/// * `width` - Width of embed region (0 to stretch between left/right anchors)
+/// * `height` - Height of embed region (0 to stretch between top/bottom anchors)
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_surface_embed_manager_v1` protocol.
+/// - **Other platforms:** No-op.
+pub fn set_embed_anchor<T>(
+    id: Id,
+    embed_id: u64,
+    anchor: u32,
+    margin_top: i32,
+    margin_right: i32,
+    margin_bottom: i32,
+    margin_left: i32,
+    width: i32,
+    height: i32,
+) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetEmbedAnchor(
+        id,
+        embed_id,
+        anchor,
+        margin_top,
+        margin_right,
+        margin_bottom,
+        margin_left,
+        width,
+        height,
+    )))
+}
+
+/// Set corner radius for an embedded surface.
+///
+/// This allows the parent to specify rounded corners that match its own UI.
+/// Each corner can have a different radius. Values are in logical pixels.
+/// A value of 0 means no rounding for that corner.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_surface_embed_manager_v1` protocol.
+/// - **Other platforms:** No-op.
+pub fn set_embed_corner_radius<T>(
+    id: Id,
+    embed_id: u64,
+    top_left: u32,
+    top_right: u32,
+    bottom_right: u32,
+    bottom_left: u32,
+) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetEmbedCornerRadius(
+        id,
+        embed_id,
+        top_left,
+        top_right,
+        bottom_right,
+        bottom_left,
+    )))
+}
+
+/// Set interactivity for an embedded surface.
+///
+/// When interactive, pointer/keyboard/touch events within the embed
+/// region will be routed to the embedded toplevel.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_surface_embed_manager_v1` protocol.
+/// - **Other platforms:** No-op.
+pub fn set_embed_interactive<T>(id: Id, embed_id: u64, interactive: bool) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetEmbedInteractive(
+        id,
+        embed_id,
+        interactive,
+    )))
+}
+
+/// Remove an embedded surface.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_surface_embed_manager_v1` protocol.
+/// - **Other platforms:** No-op.
+pub fn remove_embed<T>(id: Id, embed_id: u64) -> Task<T> {
+    task::effect(crate::Action::Window(Action::RemoveEmbed(id, embed_id)))
 }
 
 /// Set the window to be resizable or not.

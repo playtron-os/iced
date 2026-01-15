@@ -1671,6 +1671,175 @@ fn run_action<'a, P, C>(
                     window.raw.request_redraw();
                 }
             }
+            window::Action::EmbedToplevelByPid(
+                id,
+                pid,
+                app_id,
+                x,
+                y,
+                width,
+                height,
+                interactive,
+                channel,
+            ) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let result = window.raw.embed_toplevel_by_pid(
+                            pid, &app_id, x, y, width, height, interactive,
+                        );
+                        let _ = channel.send(result);
+                    } else {
+                        let _ = channel.send(None);
+                    }
+                }
+                #[cfg(not(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                )))]
+                {
+                    // Embedding not supported on non-Wayland platforms
+                    let _ = channel.send(None);
+                }
+            }
+            window::Action::SetEmbedGeometry(id, embed_id, x, y, width, height) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.set_embed_geometry(embed_id, x, y, width, height);
+                    }
+                }
+            }
+            window::Action::SetEmbedAnchor(
+                id,
+                embed_id,
+                anchor,
+                margin_top,
+                margin_right,
+                margin_bottom,
+                margin_left,
+                width,
+                height,
+            ) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.set_embed_anchor(
+                            embed_id,
+                            anchor,
+                            margin_top,
+                            margin_right,
+                            margin_bottom,
+                            margin_left,
+                            width,
+                            height,
+                        );
+                    }
+                }
+            }
+            window::Action::SetEmbedCornerRadius(
+                id,
+                embed_id,
+                top_left,
+                top_right,
+                bottom_right,
+                bottom_left,
+            ) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.set_embed_corner_radius(
+                            embed_id,
+                            top_left,
+                            top_right,
+                            bottom_right,
+                            bottom_left,
+                        );
+                    }
+                }
+            }
+            window::Action::SetEmbedInteractive(id, embed_id, interactive) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.set_embed_interactive(embed_id, interactive);
+                    }
+                }
+            }
+            window::Action::RemoveEmbed(id, embed_id) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.remove_embed(embed_id);
+                    }
+                }
+            }
         },
         Action::System(action) => match action {
             system::Action::GetInformation(_channel) => {
