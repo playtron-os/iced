@@ -1840,6 +1840,24 @@ fn run_action<'a, P, C>(
                     }
                 }
             }
+            window::Action::SetExclusiveMode(id, exclusive) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.set_exclusive_mode(exclusive);
+                    }
+                }
+            }
         },
         Action::System(action) => match action {
             system::Action::GetInformation(_channel) => {

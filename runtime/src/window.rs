@@ -232,6 +232,11 @@ pub enum Action {
 
     /// Recompute the layouts of all the windows.
     RelayoutAll,
+
+    /// Set exclusive mode for the window (COSMIC compositor protocol).
+    /// When enabled, all other windows are hidden. When disabled, other windows are restored.
+    /// Parameters are (window_id, exclusive).
+    SetExclusiveMode(Id, bool),
 }
 
 /// A window managed by iced.
@@ -747,5 +752,19 @@ pub fn monitor_size(id: Id) -> Task<Option<Size>> {
 pub fn allow_automatic_tabbing<T>(enabled: bool) -> Task<T> {
     task::effect(crate::Action::Window(Action::SetAllowAutomaticTabbing(
         enabled,
+    )))
+}
+
+/// Sets exclusive mode for the window using the COSMIC exclusive mode protocol.
+///
+/// When enabled, all other windows on the screen are hidden/minimized.
+/// When disabled, previously hidden windows are restored.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_exclusive_mode_v1` protocol.
+/// - **Other platforms:** No effect.
+pub fn set_exclusive_mode<T>(id: Id, exclusive: bool) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetExclusiveMode(
+        id, exclusive,
     )))
 }
