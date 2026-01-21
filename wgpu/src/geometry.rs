@@ -565,6 +565,13 @@ impl Transform {
                 linear.start = self.transform_point(linear.start);
                 linear.end = self.transform_point(linear.end);
             }
+            Gradient::Radial(radial) => {
+                radial.center = self.transform_point(radial.center);
+                // Scale radii by the x and y scale factors
+                let (scale_x, scale_y) = self.scale();
+                radial.radius_x *= scale_x;
+                radial.radius_y *= scale_y;
+            }
         }
 
         gradient

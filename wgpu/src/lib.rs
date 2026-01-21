@@ -876,6 +876,11 @@ fn apply_opacity(
                         color_stop.color.a *= opacity;
                     }
                 }
+                core::Gradient::Radial(radial) => {
+                    for color_stop in radial.stops.iter_mut().flatten() {
+                        color_stop.color.a *= opacity;
+                    }
+                }
             }
             Background::Gradient(gradient)
         }

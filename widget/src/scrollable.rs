@@ -2159,6 +2159,7 @@ pub fn default(theme: &Theme, status: Status) -> Style {
             color: Color::BLACK.scale_alpha(0.7),
             offset: Vector::ZERO,
             blur_radius: 2.0,
+            inset: false,
         },
         icon: palette.background.base.text.scale_alpha(0.8),
     };

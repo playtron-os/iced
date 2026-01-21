@@ -11,4 +11,36 @@ pub struct Shadow {
 
     /// The blur radius of the shadow.
     pub blur_radius: f32,
+
+    /// Whether the shadow is inset (inside the element) or outset (outside).
+    /// Default is `false` (outset shadow).
+    pub inset: bool,
+}
+
+impl Shadow {
+    /// Creates a new outset (default) shadow.
+    pub fn new(color: Color, offset: Vector, blur_radius: f32) -> Self {
+        Self {
+            color,
+            offset,
+            blur_radius,
+            inset: false,
+        }
+    }
+
+    /// Creates a new inset shadow.
+    pub fn inset(color: Color, offset: Vector, blur_radius: f32) -> Self {
+        Self {
+            color,
+            offset,
+            blur_radius,
+            inset: true,
+        }
+    }
+
+    /// Sets whether the shadow is inset.
+    pub fn with_inset(mut self, inset: bool) -> Self {
+        self.inset = inset;
+        self
+    }
 }

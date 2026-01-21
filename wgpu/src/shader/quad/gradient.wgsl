@@ -5,22 +5,26 @@ struct GradientVertexInput {
     @location(2) @interpolate(flat) colors_3: vec4<u32>,
     @location(3) @interpolate(flat) colors_4: vec4<u32>,
     @location(4) @interpolate(flat) offsets: vec4<u32>,
-    @location(5) direction: vec4<f32>,
-    @location(6) position_and_scale: vec4<f32>,
-    @location(7) border_color: vec4<f32>,
-    @location(8) border_radius: vec4<f32>,
-    @location(9) border_width: f32,
-    @location(10) snap: u32,
+    @location(5) direction: vec4<f32>,  // Linear: start/end, Radial: center/radius
+    @location(6) gradient_type: u32,
+    @location(7) _padding: vec3<u32>,
+    @location(8) position_and_scale: vec4<f32>,
+    @location(9) border_color: vec4<f32>,
+    @location(10) border_radius: vec4<f32>,
+    @location(11) border_width: f32,
+    @location(12) shadow_inset: u32,
+    @location(13) snap: u32,
 }
 
 struct GradientVertexOutput {
     @builtin(position) position: vec4<f32>,
-    @location(1) @interpolate(flat) colors_1: vec4<u32>,
-    @location(2) @interpolate(flat) colors_2: vec4<u32>,
-    @location(3) @interpolate(flat) colors_3: vec4<u32>,
-    @location(4) @interpolate(flat) colors_4: vec4<u32>,
-    @location(5) @interpolate(flat) offsets: vec4<u32>,
-    @location(6) direction: vec4<f32>,
+    @location(0) @interpolate(flat) colors_1: vec4<u32>,
+    @location(1) @interpolate(flat) colors_2: vec4<u32>,
+    @location(2) @interpolate(flat) colors_3: vec4<u32>,
+    @location(3) @interpolate(flat) colors_4: vec4<u32>,
+    @location(4) @interpolate(flat) offsets: vec4<u32>,
+    @location(5) direction: vec4<f32>,  // Linear: start/end, Radial: center/radius
+    @location(6) @interpolate(flat) gradient_type: u32,
     @location(7) position_and_scale: vec4<f32>,
     @location(8) border_color: vec4<f32>,
     @location(9) border_radius: vec4<f32>,
@@ -64,6 +68,7 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.colors_4 = input.colors_4;
     out.offsets = input.offsets;
     out.direction = input.direction * globals.scale;
+    out.gradient_type = input.gradient_type;
     out.position_and_scale = vec4<f32>(pos + pos_snap, scale + scale_snap);
     out.border_color = premultiply(input.border_color);
     out.border_radius = border_radius * globals.scale;
@@ -76,8 +81,8 @@ fn random(coords: vec2<f32>) -> f32 {
     return fract(sin(dot(coords, vec2(12.9898,78.233))) * 43758.5453);
 }
 
-/// Returns the current interpolated color with a max 8-stop gradient
-fn gradient(
+/// Returns the current interpolated color with a max 8-stop gradient (linear)
+fn gradient_linear(
     raw_position: vec2<f32>,
     direction: vec4<f32>,
     colors: array<vec4<f32>, 8>,
@@ -125,6 +130,50 @@ fn gradient(
     return color + mix(-noise_granularity, noise_granularity, random(raw_position));
 }
 
+/// Returns the current interpolated color with a max 8-stop radial gradient
+fn gradient_radial(
+    raw_position: vec2<f32>,
+    center: vec2<f32>,
+    radius: vec2<f32>,
+    colors: array<vec4<f32>, 8>,
+    offsets: array<f32, 8>,
+    last_index: i32
+) -> vec4<f32> {
+    // Calculate normalized distance from center (elliptical)
+    let diff = raw_position - center;
+    let normalized_dist = length(diff / radius);
+
+    var colors_arr = colors;
+    var offsets_arr = offsets;
+
+    var color: vec4<f32>;
+
+    let noise_granularity: f32 = 0.3/255.0;
+
+    for (var i: i32 = 0; i < last_index; i++) {
+        let curr_offset = offsets_arr[i];
+        let next_offset = offsets_arr[i+1];
+
+        if (normalized_dist <= offsets_arr[0]) {
+            color = colors_arr[0];
+        }
+
+        if (curr_offset <= normalized_dist && normalized_dist <= next_offset) {
+            let from_ = colors_arr[i];
+            let to_ = colors_arr[i+1];
+            let factor = smoothstep(curr_offset, next_offset, normalized_dist);
+
+            color = interpolate_color(from_, to_, factor);
+        }
+
+        if (normalized_dist >= offsets_arr[last_index]) {
+            color = colors_arr[last_index];
+        }
+    }
+
+    return color + mix(-noise_granularity, noise_granularity, random(raw_position));
+}
+
 @fragment
 fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     let colors = array<vec4<f32>, 8>(
@@ -161,7 +210,15 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    var mixed_color: vec4<f32> = gradient(input.position.xy, input.direction, colors, offsets, last_index);
+    var mixed_color: vec4<f32>;
+
+    // Check gradient type: 0 = linear, 1 = radial
+    // direction contains: Linear: start.xy/end.zw, Radial: center.xy/radius.zw
+    if (input.gradient_type == 1u) {
+        mixed_color = gradient_radial(input.position.xy, input.direction.xy, input.direction.zw, colors, offsets, last_index);
+    } else {
+        mixed_color = gradient_linear(input.position.xy, input.direction, colors, offsets, last_index);
+    }
 
     let pos = input.position_and_scale.xy;
     let scale = input.position_and_scale.zw;

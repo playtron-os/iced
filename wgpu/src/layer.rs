@@ -53,6 +53,7 @@ impl Layer {
             shadow_color: color::pack(quad.shadow.color),
             shadow_offset: (quad.shadow.offset * transformation.scale_factor()).into(),
             shadow_blur_radius: quad.shadow.blur_radius * transformation.scale_factor(),
+            shadow_inset: quad.shadow.inset as u32,
             snap: quad.snap as u32,
         };
 
