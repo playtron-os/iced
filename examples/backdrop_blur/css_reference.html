@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backdrop Blur Demo - CSS Reference</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: rgb(26, 26, 38);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Colorful pattern background */
+        .pattern-background {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .circle {
+            position: absolute;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+        }
+
+        /* Glass card with backdrop blur */
+        .glass-card {
+            position: relative;
+            width: 450px;
+            padding: 30px;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            z-index: 10;
+        }
+
+        .glass-card h1 {
+            color: white;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .glass-card p {
+            color: rgba(230, 230, 230, 1);
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .slider-row label {
+            color: white;
+            font-size: 14px;
+        }
+
+        .slider-row input[type="range"] {
+            width: 200px;
+            accent-color: #4a9eff;
+        }
+
+        .slider-row .value {
+            color: white;
+            font-size: 14px;
+            min-width: 50px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="pattern-background" id="pattern"></div>
+        <div class="glass-card" id="card">
+            <h1>Glassmorphism Effect</h1>
+            <p>This card should blur the background</p>
+            <div class="slider-row">
+                <label>Blur Radius:</label>
+                <input type="range" id="blurSlider" min="0" max="50" value="20">
+                <span class="value" id="blurValue">20px</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Generate colorful circles pattern
+        const colors = [
+            'rgb(255, 51, 51)',   // Red
+            'rgb(51, 255, 51)',   // Green
+            'rgb(51, 51, 255)',   // Blue
+            'rgb(255, 255, 51)',  // Yellow
+            'rgb(255, 51, 255)',  // Magenta
+            'rgb(51, 255, 255)',  // Cyan
+            'rgb(255, 128, 0)',   // Orange
+            'rgb(128, 0, 255)',   // Purple
+        ];
+
+        const pattern = document.getElementById('pattern');
+        const circleSize = 60;
+        const spacing = 80;
+
+        for (let row = 0; row < 20; row++) {
+            for (let col = 0; col < 25; col++) {
+                const circle = document.createElement('div');
+                circle.className = 'circle';
+                circle.style.left = (col * spacing + 40 - circleSize / 2) + 'px';
+                circle.style.top = (row * spacing + 40 - circleSize / 2) + 'px';
+                circle.style.backgroundColor = colors[(row + col) % colors.length];
+                pattern.appendChild(circle);
+            }
+        }
+
+        // Blur slider functionality
+        const slider = document.getElementById('blurSlider');
+        const valueDisplay = document.getElementById('blurValue');
+        const card = document.getElementById('card');
+
+        slider.addEventListener('input', function () {
+            const value = this.value;
+            valueDisplay.textContent = value + 'px';
+            card.style.backdropFilter = `blur(${value}px)`;
+            card.style.webkitBackdropFilter = `blur(${value}px)`;
+        });
+    </script>
+</body>
+
+</html>

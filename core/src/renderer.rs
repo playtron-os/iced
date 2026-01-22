@@ -117,6 +117,35 @@ pub trait Renderer {
         self.end_gradient_fade();
     }
 
+    /// Draws a backdrop blur effect at the given bounds.
+    ///
+    /// This blurs all content that was drawn BEFORE this call within the specified bounds.
+    /// Content drawn after this call will appear on top of the blurred area.
+    ///
+    /// # Arguments
+    /// * `bounds` - The area where the blur effect applies
+    /// * `radius` - The blur radius in logical pixels
+    /// * `border_radius` - Border radius [top_left, top_right, bottom_right, bottom_left] in logical pixels
+    fn draw_backdrop_blur(&mut self, _bounds: Rectangle, _radius: f32, _border_radius: [f32; 4]) {}
+
+    /// Begins recording content that should be rendered AFTER backdrop blur effects.
+    ///
+    /// Content drawn between `start_post_blur_layer` and `end_post_blur_layer` will be
+    /// rendered after all blur effects are applied, ensuring it appears on top of blurred areas.
+    fn start_post_blur_layer(&mut self, _bounds: Rectangle) {}
+
+    /// Ends recording post-blur content.
+    fn end_post_blur_layer(&mut self) {}
+
+    /// Helper to draw content that appears on top of backdrop blur.
+    ///
+    /// This is a convenience wrapper around `start_post_blur_layer` and `end_post_blur_layer`.
+    fn with_post_blur_layer(&mut self, bounds: Rectangle, f: impl FnOnce(&mut Self)) {
+        self.start_post_blur_layer(bounds);
+        f(self);
+        self.end_post_blur_layer();
+    }
+
     /// Fills a [`Quad`] with the provided [`Background`].
     fn fill_quad(&mut self, quad: Quad, background: impl Into<Background>);
 

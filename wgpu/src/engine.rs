@@ -1,3 +1,4 @@
+use crate::blur;
 use crate::gradient_fade;
 use crate::graphics::{Antialiasing, Shell};
 use crate::primitive;
@@ -19,6 +20,7 @@ pub struct Engine {
     #[cfg(any(feature = "image", feature = "svg"))]
     pub(crate) image_pipeline: crate::image::Pipeline,
     pub(crate) gradient_fade_pipeline: gradient_fade::Pipeline,
+    pub(crate) blur_pipeline: blur::Pipeline,
     pub(crate) primitive_storage: Arc<RwLock<primitive::Storage>>,
     _shell: Shell,
 }
@@ -47,6 +49,7 @@ impl Engine {
             },
 
             gradient_fade_pipeline: gradient_fade::Pipeline::new(&device, format),
+            blur_pipeline: blur::Pipeline::new(&device, format),
             primitive_storage: Arc::new(RwLock::new(primitive::Storage::default())),
 
             device,

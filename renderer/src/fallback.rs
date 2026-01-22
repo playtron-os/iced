@@ -88,6 +88,22 @@ where
         delegate!(self, renderer, renderer.end_gradient_fade());
     }
 
+    fn draw_backdrop_blur(&mut self, bounds: Rectangle, radius: f32, border_radius: [f32; 4]) {
+        delegate!(
+            self,
+            renderer,
+            renderer.draw_backdrop_blur(bounds, radius, border_radius)
+        );
+    }
+
+    fn start_post_blur_layer(&mut self, bounds: Rectangle) {
+        delegate!(self, renderer, renderer.start_post_blur_layer(bounds));
+    }
+
+    fn end_post_blur_layer(&mut self) {
+        delegate!(self, renderer, renderer.end_post_blur_layer());
+    }
+
     fn allocate_image(
         &mut self,
         handle: &image::Handle,

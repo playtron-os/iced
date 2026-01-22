@@ -10,6 +10,7 @@ pub use iced_renderer::graphics;
 pub use core::widget::Id;
 
 mod action;
+mod backdrop_blur;
 mod column;
 mod gradient_fade;
 mod mouse_area;
@@ -55,6 +56,8 @@ mod lazy;
 #[cfg(feature = "lazy")]
 pub use crate::lazy::helpers::*;
 
+#[doc(no_inline)]
+pub use backdrop_blur::{BackdropBlur, backdrop_blur};
 #[doc(no_inline)]
 pub use button::Button;
 #[doc(no_inline)]

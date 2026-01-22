@@ -260,10 +260,12 @@ pub fn present(
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
 
-            let _submission = renderer.present(
+            // Use present_with_texture to enable backdrop blur effects
+            let _submission = renderer.present_with_texture(
                 Some(background_color),
                 frame.texture.format(),
                 view,
+                &frame.texture,
                 viewport,
             );
 
@@ -344,10 +346,17 @@ impl graphics::Compositor for Compositor {
     }
 
     fn configure_surface(&mut self, surface: &mut Self::Surface, width: u32, height: u32) {
+        // WASM/WebGL doesn't support COPY_SRC on swapchain textures
+        // On native, we need COPY_SRC for backdrop blur to copy the scene
+        #[cfg(target_arch = "wasm32")]
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        #[cfg(not(target_arch = "wasm32"))]
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
+
         surface.configure(
             &self.engine.device,
             &wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage,
                 format: self.format,
                 present_mode: self.settings.present_mode,
                 width,

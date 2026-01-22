@@ -22,6 +22,7 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(missing_docs)]
+pub mod blur;
 pub mod gradient_fade;
 pub mod layer;
 pub mod primitive;
@@ -97,6 +98,11 @@ pub struct Renderer {
     /// Gradient fade state for offscreen rendering
     gradient_fade: gradient_fade::State,
 
+    /// Backdrop blur state
+    blur_state: blur::State,
+    /// Backdrop blur texture cache
+    blur_cache: blur::TextureCache,
+
     staging_belt: wgpu::util::StagingBelt,
 }
 
@@ -122,6 +128,9 @@ impl Renderer {
 
             gradient_fade: gradient_fade::State::new(),
 
+            blur_state: blur::State::new(),
+            blur_cache: blur::TextureCache::new(),
+
             // TODO: Resize belt smartly (?)
             // It would be great if the `StagingBelt` API exposed methods
             // for introspection to detect when a resize may be worth it.
@@ -137,10 +146,12 @@ impl Renderer {
         *self.opacity_stack.last().unwrap_or(&1.0)
     }
 
+    #[allow(unused_variables)]
     fn draw(
         &mut self,
         clear_color: Option<Color>,
         target: &wgpu::TextureView,
+        target_texture: Option<&wgpu::Texture>,
         viewport: &Viewport,
     ) -> wgpu::CommandEncoder {
         let mut encoder =
@@ -151,7 +162,27 @@ impl Renderer {
                 });
 
         self.prepare(&mut encoder, viewport);
-        self.render(&mut encoder, target, clear_color, viewport);
+
+        // Platform-specific blur handling:
+        // - Native: render to swapchain, copy from swapchain, blur (COPY_SRC supported)
+        // - WASM: render to offscreen texture, blur from that (no COPY_SRC on swapchain)
+        #[cfg(target_arch = "wasm32")]
+        {
+            if self.blur_state.has_regions() {
+                // WASM path: render background to scene_copy, blur, then render to swapchain
+                self.draw_with_offscreen_blur(&mut encoder, target, clear_color, viewport);
+            } else {
+                // No blur needed, render directly to swapchain
+                self.render(&mut encoder, target, clear_color, viewport);
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Native path: render to swapchain, copy, blur
+            self.render(&mut encoder, target, clear_color, viewport);
+            self.apply_backdrop_blurs(&mut encoder, target, target_texture, viewport);
+        }
 
         // Process gradient fade regions after main render
         self.apply_gradient_fades(&mut encoder, target, viewport);
@@ -179,7 +210,26 @@ impl Renderer {
         frame: &wgpu::TextureView,
         viewport: &Viewport,
     ) -> wgpu::SubmissionIndex {
-        let encoder = self.draw(clear_color, frame, viewport);
+        let encoder = self.draw(clear_color, frame, None, viewport);
+
+        self.staging_belt.finish();
+        let submission = self.engine.queue.submit([encoder.finish()]);
+        self.staging_belt.recall();
+        submission
+    }
+
+    /// Present with access to the swapchain texture for advanced effects like backdrop blur.
+    ///
+    /// The `frame_texture` allows copying the rendered scene for blur effects.
+    pub fn present_with_texture(
+        &mut self,
+        clear_color: Option<Color>,
+        _format: wgpu::TextureFormat,
+        frame: &wgpu::TextureView,
+        frame_texture: &wgpu::Texture,
+        viewport: &Viewport,
+    ) -> wgpu::SubmissionIndex {
+        let encoder = self.draw(clear_color, frame, Some(frame_texture), viewport);
 
         self.staging_belt.finish();
         let submission = self.engine.queue.submit([encoder.finish()]);
@@ -239,7 +289,7 @@ impl Renderer {
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.draw(Some(background_color), &view, viewport);
+        let mut encoder = self.draw(Some(background_color), &view, Some(&texture), viewport);
 
         let texture = crate::color::convert(
             &self.engine.device,
@@ -303,7 +353,29 @@ impl Renderer {
         let physical_bounds =
             Rectangle::<f32>::from(Rectangle::with_size(viewport.physical_size()));
 
-        self.layers.merge();
+        // Only merge layers if there are no pending blur effects
+        // Layer merging changes indices which would break post-blur content tracking
+        let has_blur = self.blur_state.has_post_blur_content() || self.blur_state.has_regions();
+        log::trace!(
+            "PREPARE: has_blur={}, post_blur_content={}, regions={}",
+            has_blur,
+            self.blur_state.has_post_blur_content(),
+            self.blur_state.has_regions()
+        );
+
+        if !has_blur {
+            log::trace!("PREPARE: merging layers");
+            self.layers.merge();
+        } else {
+            log::trace!("PREPARE: skipping merge, just flushing");
+            // Just flush without merging
+            self.layers.flush();
+        }
+
+        log::trace!(
+            "PREPARE: active layers after prepare: {}",
+            self.layers.active_count()
+        );
 
         for layer in self.layers.iter() {
             let clip_bounds = layer.bounds * scale_factor;
@@ -460,7 +532,7 @@ impl Renderer {
 
         let scale = Transformation::scale(scale_factor);
 
-        // Iterate with index so we can check gradient fade regions
+        // Iterate with index so we can check gradient fade regions and post-blur regions
         for (layer_index, layer) in self.layers.as_slice().iter().enumerate() {
             // Check if this layer is in a gradient fade region - if so, skip it here
             // It will be rendered separately in apply_gradient_fades
@@ -470,6 +542,29 @@ impl Renderer {
                     quad_layer += 1;
                 }
                 // Count actual text groups, not just non-empty batches
+                text_layer += layer
+                    .text
+                    .iter()
+                    .filter(|item| matches!(item, text::Item::Group { .. }))
+                    .count();
+                #[cfg(any(feature = "svg", feature = "image"))]
+                if !layer.images.is_empty() {
+                    image_layer += 1;
+                }
+                continue;
+            }
+
+            // Check if this layer is post-blur content - if so, skip it here
+            // It will be rendered after blur is applied
+            if self.blur_state.is_layer_in_post_blur(layer_index) {
+                log::trace!(
+                    "SKIPPING layer {} in main render - is post-blur content",
+                    layer_index
+                );
+                // Still need to count primitives so offsets are correct
+                if !layer.quads.is_empty() {
+                    quad_layer += 1;
+                }
                 text_layer += layer
                     .text
                     .iter()
@@ -670,6 +765,385 @@ impl Renderer {
                 })
                 .count()
         });
+    }
+
+    /// WASM-specific: Draw with offscreen blur support.
+    ///
+    /// On WASM/WebGL, we can't copy from the swapchain (no COPY_SRC support).
+    /// Instead, we render background content to an offscreen texture first,
+    /// apply blur from that, then render to the swapchain.
+    #[cfg(target_arch = "wasm32")]
+    fn draw_with_offscreen_blur(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        clear_color: Option<Color>,
+        viewport: &Viewport,
+    ) {
+        let physical_size = viewport.physical_size();
+
+        // Ensure textures exist
+        let _ = self.blur_cache.get_blur_textures(
+            &self.engine.device,
+            physical_size,
+            self.engine.format,
+        );
+
+        // Get a view from the scene_copy texture for rendering to
+        let scene_copy_view = self
+            .blur_cache
+            .get_scene_copy_texture()
+            .unwrap()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Render background (non-post-blur layers) to offscreen texture
+        self.render(encoder, &scene_copy_view, clear_color, viewport);
+
+        // Take blur regions and post-blur content
+        let regions = self.blur_state.take_regions();
+        let post_blur_content = self.blur_state.take_post_blur_content();
+
+        // First, blit background to swapchain (need fresh view reference)
+        let scene_view = self
+            .blur_cache
+            .get_scene_copy_texture()
+            .unwrap()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.engine.blur_pipeline.blit_full(
+            &self.engine.device,
+            encoder,
+            &scene_view,
+            target,
+            physical_size,
+        );
+
+        // Apply blur for each region
+        for region in &regions {
+            // Ensure textures exist (get_blur_textures creates them if needed)
+            let _ = self.blur_cache.get_blur_textures(
+                &self.engine.device,
+                physical_size,
+                self.engine.format,
+            );
+
+            // Create owned views to avoid lifetime issues
+            let scene_view_owned = self
+                .blur_cache
+                .get_scene_copy_texture()
+                .unwrap()
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let intermediate_texture = self.blur_cache.get_intermediate(
+                &self.engine.device,
+                physical_size,
+                self.engine.format,
+            );
+
+            self.engine.blur_pipeline.render(
+                &self.engine.device,
+                encoder,
+                &scene_view_owned,
+                intermediate_texture,
+                target,
+                &region.blur,
+                viewport,
+            );
+        }
+
+        // Render post-blur content on top
+        if !post_blur_content.is_empty() {
+            self.render_post_blur_layers(encoder, target, viewport, &post_blur_content);
+        }
+    }
+
+    /// Apply backdrop blur effects to specified regions (native path).
+    ///
+    /// This copies the rendered content within blur bounds, applies a two-pass
+    /// Gaussian blur, and draws the blurred result back.
+    ///
+    /// If `target_texture` is provided, uses GPU copy to capture the scene
+    /// before applying blur. Otherwise, blur won't work (needs scene content).
+    ///
+    /// Note: On WASM, this is not called - see `draw_with_offscreen_blur` instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn apply_backdrop_blurs(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        target_texture: Option<&wgpu::Texture>,
+        viewport: &Viewport,
+    ) {
+        let regions = self.blur_state.take_regions();
+
+        if regions.is_empty() {
+            return;
+        }
+
+        log::trace!(
+            "apply_backdrop_blurs: processing {} blur regions",
+            regions.len()
+        );
+
+        let physical_size = viewport.physical_size();
+
+        // Get post-blur content regions - these layers were skipped in main render
+        let post_blur_content = self.blur_state.take_post_blur_content();
+
+        log::trace!(
+            "apply_backdrop_blurs: {} blur regions, {} post-blur content regions",
+            regions.len(),
+            post_blur_content.len()
+        );
+
+        // First, ensure textures exist and do the copy before getting views
+        // This avoids borrow checker issues
+        {
+            // Ensure textures exist by getting (and discarding) the views
+            let _ = self.blur_cache.get_blur_textures(
+                &self.engine.device,
+                physical_size,
+                self.engine.format,
+            );
+        }
+
+        // If we have the target texture, copy the scene to scene_copy
+        // Since we skipped post-blur content in the main render, this contains only the background
+        if let Some(texture) = target_texture {
+            log::trace!(
+                "apply_backdrop_blurs: copying scene texture {}x{} (background only)",
+                physical_size.width,
+                physical_size.height
+            );
+            if let Some(scene_copy_texture) = self.blur_cache.get_scene_copy_texture() {
+                // GPU copy from swapchain to our scene_copy texture
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: scene_copy_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: physical_size.width,
+                        height: physical_size.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            } else {
+                log::warn!("apply_backdrop_blurs: scene_copy_texture is None!");
+            }
+        } else {
+            log::warn!("apply_backdrop_blurs: target_texture is None - blur won't work!");
+        }
+
+        // Now get the views again for rendering (textures already exist)
+        let (scene_copy_view, intermediate_view) = self.blur_cache.get_blur_textures(
+            &self.engine.device,
+            physical_size,
+            self.engine.format,
+        );
+
+        // Process each blur region - this blurs the background and writes to target
+        for region in &regions {
+            self.engine.blur_pipeline.render(
+                &self.engine.device,
+                encoder,
+                scene_copy_view,   // Source (background only, no children)
+                intermediate_view, // Intermediate for two-pass
+                target,            // Final target
+                &region.blur,
+                viewport,
+            );
+        }
+
+        // Now render the post-blur content (children) on top of the blurred background
+        // This is done by re-rendering the layers that were skipped in the main pass
+        if !post_blur_content.is_empty() {
+            self.render_post_blur_layers(encoder, target, viewport, &post_blur_content);
+        }
+    }
+
+    /// Render layers that were skipped because they're post-blur content.
+    fn render_post_blur_layers(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &wgpu::TextureView,
+        viewport: &Viewport,
+        post_blur_content: &[blur::PostBlurContent],
+    ) {
+        log::trace!(
+            "render_post_blur_layers: rendering {} regions, total layers: {}",
+            post_blur_content.len(),
+            self.layers.as_slice().len()
+        );
+
+        for content in post_blur_content {
+            log::trace!(
+                "  post-blur range: start={}, end={:?}",
+                content.start_layer,
+                content.end_layer
+            );
+        }
+
+        let scale_factor = viewport.scale_factor();
+        let physical_bounds =
+            Rectangle::<f32>::from(Rectangle::with_size(viewport.physical_size()));
+        let scale = Transformation::scale(scale_factor);
+
+        // Track layer offsets - we need to match them with the main render
+        let mut quad_layer = 0;
+        let mut mesh_layer = 0;
+        let mut text_layer = 0;
+
+        #[cfg(any(feature = "svg", feature = "image"))]
+        let mut image_layer = 0;
+
+        // Create a render pass for post-blur content
+        let mut render_pass =
+            std::mem::ManuallyDrop::new(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("iced_wgpu post-blur render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: frame,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            }));
+
+        for (layer_index, layer) in self.layers.as_slice().iter().enumerate() {
+            // Check if this layer is within any post-blur region
+            let is_post_blur = post_blur_content.iter().any(|content| {
+                let end = content.end_layer.unwrap_or(usize::MAX);
+                layer_index >= content.start_layer && layer_index < end
+            });
+
+            if !is_post_blur {
+                // Still count the layers for offset tracking
+                if !layer.quads.is_empty() {
+                    quad_layer += 1;
+                }
+                text_layer += layer
+                    .text
+                    .iter()
+                    .filter(|item| matches!(item, text::Item::Group { .. }))
+                    .count();
+                #[cfg(any(feature = "svg", feature = "image"))]
+                if !layer.images.is_empty() {
+                    image_layer += 1;
+                }
+                continue;
+            }
+
+            log::trace!(
+                "Rendering post-blur layer {}: has_quads={}, has_triangles={}, has_text={}",
+                layer_index,
+                !layer.quads.is_empty(),
+                !layer.triangles.is_empty(),
+                !layer.text.is_empty()
+            );
+
+            let Some(physical_bounds) =
+                physical_bounds.intersection(&(layer.bounds * scale_factor))
+            else {
+                log::warn!(
+                    "Post-blur layer {} has no physical bounds intersection",
+                    layer_index
+                );
+                continue;
+            };
+
+            let Some(scissor_rect) = physical_bounds.snap() else {
+                log::warn!("Post-blur layer {} scissor rect snap failed", layer_index);
+                continue;
+            };
+
+            log::trace!(
+                "Post-blur layer {} scissor_rect: {:?}",
+                layer_index,
+                scissor_rect
+            );
+
+            if !layer.quads.is_empty() {
+                log::trace!("Rendering quads at quad_layer {}", quad_layer);
+                self.quad.render(
+                    &self.engine.quad_pipeline,
+                    quad_layer,
+                    scissor_rect,
+                    &layer.quads,
+                    &mut render_pass,
+                );
+                quad_layer += 1;
+            }
+
+            if !layer.triangles.is_empty() {
+                let _ = std::mem::ManuallyDrop::into_inner(render_pass);
+
+                mesh_layer += self.triangle.render(
+                    &self.engine.triangle_pipeline,
+                    encoder,
+                    frame,
+                    mesh_layer,
+                    &layer.triangles,
+                    physical_bounds,
+                    scale,
+                );
+
+                render_pass = std::mem::ManuallyDrop::new(encoder.begin_render_pass(
+                    &wgpu::RenderPassDescriptor {
+                        label: Some("iced_wgpu post-blur render pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: frame,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    },
+                ));
+            }
+
+            if !layer.text.is_empty() {
+                log::trace!("Rendering text at text_layer {}", text_layer);
+                text_layer += self.text.render(
+                    &self.engine.text_pipeline,
+                    &self.text_viewport,
+                    text_layer,
+                    &layer.text,
+                    scissor_rect,
+                    &mut render_pass,
+                );
+            }
+
+            #[cfg(any(feature = "svg", feature = "image"))]
+            if !layer.images.is_empty() {
+                self.image.render(
+                    &self.engine.image_pipeline,
+                    image_layer,
+                    scissor_rect,
+                    &mut render_pass,
+                );
+                image_layer += 1;
+            }
+        }
+
+        // Drop the render pass
+        let _ = std::mem::ManuallyDrop::into_inner(render_pass);
     }
 
     /// Apply gradient fade effects by re-rendering regions with the gradient shader.
@@ -949,10 +1423,16 @@ impl core::Renderer for Renderer {
     }
 
     fn reset(&mut self, new_bounds: Rectangle) {
+        log::trace!(
+            "RESET called - layers before: {}",
+            self.layers.active_count()
+        );
         self.layers.reset(new_bounds);
+        log::trace!("RESET - layers after reset: {}", self.layers.active_count());
         self.opacity_stack.clear();
         self.opacity_stack.push(1.0);
         self.gradient_fade.clear();
+        self.blur_state.clear();
     }
 
     fn start_opacity(&mut self, _bounds: Rectangle, opacity: f32) {
@@ -1002,6 +1482,64 @@ impl core::Renderer for Renderer {
         let layer_count = self.layers.active_count();
 
         let _ = self.gradient_fade.end(layer_count);
+    }
+
+    fn draw_backdrop_blur(&mut self, bounds: Rectangle, radius: f32, border_radius: [f32; 4]) {
+        log::trace!(
+            "draw_backdrop_blur called: bounds={:?}, radius={}, border_radius={:?}",
+            bounds,
+            radius,
+            border_radius
+        );
+
+        // Flush current layer to ensure all prior content is committed
+        self.layers.flush();
+        let layer_count = self.layers.active_count();
+
+        // Record this blur region with the current layer index
+        let blur = blur::BackdropBlur::with_border_radius(bounds, radius, border_radius);
+        self.blur_state.add_region(blur, layer_count);
+
+        log::trace!(
+            "draw_backdrop_blur: added region, total regions now: {}",
+            if self.blur_state.has_regions() {
+                "some"
+            } else {
+                "none"
+            }
+        );
+    }
+
+    fn start_post_blur_layer(&mut self, bounds: Rectangle) {
+        log::trace!("start_post_blur_layer called: bounds={:?}", bounds);
+
+        // Push a new layer for post-blur content
+        // This ensures children are drawn to a dedicated layer that can be
+        // skipped in the main render pass and rendered after blur
+        self.layers.push_clip(bounds);
+        let layer_count = self.layers.active_count();
+        log::trace!(
+            "start_post_blur_layer: pushed layer, now have {} layers",
+            layer_count
+        );
+
+        // Start recording post-blur content - use the new layer's index
+        // The new layer is at index (layer_count - 1)
+        self.blur_state.start_post_blur(bounds, layer_count - 1);
+    }
+
+    fn end_post_blur_layer(&mut self) {
+        log::trace!("end_post_blur_layer called");
+
+        // Get the current layer index BEFORE popping (this is the layer with our content)
+        let current_layer = self.layers.active_count() - 1;
+
+        // Pop the clipping layer we pushed in start_post_blur_layer
+        self.layers.pop_clip();
+
+        // End recording post-blur content
+        // The content is in the layer we just popped, so end_layer = current_layer + 1
+        self.blur_state.end_post_blur(current_layer + 1);
     }
 }
 
