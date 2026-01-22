@@ -3,7 +3,7 @@
 //! Demonstrates the backdrop blur effect for glassmorphism UI.
 
 use iced::widget::{Canvas, backdrop_blur, canvas, column, container, row, slider, space, text};
-use iced::{Background, Color, Element, Fill, Length, Point, Rectangle, Renderer, Theme};
+use iced::{Background, Color, Element, Fill, Gradient, Point, Rectangle, Renderer, Theme, Vector};
 
 pub fn main() -> iced::Result {
     #[cfg(target_arch = "wasm32")]
@@ -108,45 +108,84 @@ impl App {
             canvas(PatternBackground).width(Fill).height(Fill);
 
         // Glass card with backdrop blur
-        let glass_card = backdrop_blur(
-            container(
-                column![
-                    text("Glassmorphism Effect").size(24).color(Color::WHITE),
-                    space::vertical().height(10),
-                    text("This card should blur the background")
-                        .size(14)
-                        .color(Color::from_rgb(0.9, 0.9, 0.9)),
-                    space::vertical().height(20),
-                    row![
-                        text("Blur Radius:").size(14).color(Color::WHITE),
-                        slider(0.0..=50.0, self.blur_radius, Message::BlurRadiusChanged)
-                            .width(200.0)
-                            .step(1.0),
-                        text(format!("{:.0}px", self.blur_radius))
-                            .size(14)
-                            .color(Color::WHITE),
-                    ]
-                    .spacing(10)
-                    .align_y(iced::Alignment::Center),
-                ]
-                .spacing(5)
-                .padding(30),
-            )
-            .style(|_| container::Style {
-                background: None, // DEBUG: Remove background to see blur layer clearly
+        // CSS styling:
+        // background: radial-gradient(41.71% 33.33% at 47.15% 100%, rgba(255, 255, 255, 0.20) 0%, rgba(255, 255, 255, 0.00) 100%),
+        //             linear-gradient(0deg, rgba(255, 255, 255, 0.20) 0%, rgba(255, 255, 255, 0.20) 100%);
+        // box-shadow: 0 2px 15px 0 rgba(0, 0, 0, 0.10) inset, 0 4px 10px 0 rgba(0, 0, 0, 0.05);
+        // backdrop-filter: blur(25px);
+
+        let content = column![
+            text("Glassmorphism Effect").size(24).color(Color::WHITE),
+            space::vertical().height(10),
+            text("This card should blur the background")
+                .size(14)
+                .color(Color::from_rgb(0.9, 0.9, 0.9)),
+            space::vertical().height(20),
+            row![
+                text("Blur Radius:").size(14).color(Color::WHITE),
+                slider(0.0..=50.0, self.blur_radius, Message::BlurRadiusChanged)
+                    .width(200.0)
+                    .step(1.0),
+                text(format!("{:.0}px", self.blur_radius))
+                    .size(14)
+                    .color(Color::WHITE),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+        ]
+        .spacing(5)
+        .padding(30);
+
+        // Inner container: Gradient background + inset shadow
+        // CSS: radial-gradient + 0 2px 15px 0 rgba(0, 0, 0, 0.10) inset
+        let inner_card = container(content).width(Fill).style(|_| {
+            let radial = Gradient::Radial(
+                iced::gradient::Radial::elliptical(Point::new(0.4715, 1.0), 0.4171, 0.3333)
+                    .add_stop(0.0, Color::from_rgba(1.0, 1.0, 1.0, 0.20))
+                    .add_stop(1.0, Color::from_rgba(1.0, 1.0, 1.0, 0.0)),
+            );
+
+            container::Style {
+                background: Some(Background::Gradient(radial)),
                 border: iced::Border {
-                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.3),
+                    color: Color::from_rgba(1.0, 1.0, 1.0, 1.0),
                     width: 1.0,
-                    radius: 16.0.into(),
+                    radius: 20.0.into(),
                 },
-                // DEBUG: Remove shadow too
+                shadow: iced::Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.9),
+                    offset: Vector::new(0.0, 2.0),
+                    blur_radius: 15.0,
+                    inset: true,
+                },
                 ..Default::default()
-            }),
-        )
-        .blur_radius(self.blur_radius)
-        .border_radius(16.0) // Match container border radius
-        .width(450.0)
-        .height(Length::Shrink);
+            }
+        });
+
+        // Outer container: Outset shadow (drop shadow)
+        // CSS: 0 4px 10px 0 rgba(0, 0, 0, 0.05)
+        let glass_card =
+            backdrop_blur(
+                container(inner_card)
+                    .width(450.0)
+                    .style(|_| container::Style {
+                        background: None,
+                        border: iced::Border {
+                            color: Color::TRANSPARENT,
+                            width: 0.0,
+                            radius: 20.0.into(),
+                        },
+                        shadow: iced::Shadow {
+                            color: Color::from_rgba(0.0, 0.0, 0.0, 0.9),
+                            offset: Vector::new(0.0, 4.0),
+                            blur_radius: 10.0,
+                            inset: false,
+                        },
+                        ..Default::default()
+                    }),
+            )
+            .blur_radius(self.blur_radius)
+            .border_radius(20.0);
 
         // Stack everything
         container(

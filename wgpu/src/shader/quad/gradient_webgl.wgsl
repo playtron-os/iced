@@ -1,56 +1,93 @@
 // WebGL2-compatible gradient shader with reduced inter-stage varyings
-// Supports max 4 gradient stops instead of 8 to stay within WebGL2's 31 component limit
+// Supports max 4 gradient stops instead of 8 to stay within WebGL2's limits
 // Also supports radial gradients (gradient_type == 1)
+// Includes shadow support by packing colors and flags to fit within 31 varyings
 
-// Input must match the native shader's vertex attribute layout exactly
-// since they share the same Gradient struct and vertex buffer
+// Reduced input struct for WebGL2 - skips colors_3, colors_4, and _padding
+// Uses explicit offsets in Rust to read from correct buffer positions
 struct GradientVertexInput {
     @builtin(vertex_index) vertex_index: u32,
     @location(0) @interpolate(flat) colors_1: vec4<u32>,
     @location(1) @interpolate(flat) colors_2: vec4<u32>,
-    @location(2) @interpolate(flat) colors_3: vec4<u32>,
-    @location(3) @interpolate(flat) colors_4: vec4<u32>,
-    @location(4) @interpolate(flat) offsets: vec4<u32>,
-    @location(5) direction: vec4<f32>,  // Linear: start/end, Radial: center/radius
-    @location(6) gradient_type: u32,
-    @location(7) _padding: vec3<u32>,
-    @location(8) position_and_scale: vec4<f32>,
-    @location(9) border_color: vec4<f32>,
-    @location(10) border_radius: vec4<f32>,
-    @location(11) border_width: f32,
-    @location(12) shadow_inset: u32,
-    @location(13) snap: u32,
-}
-
-// Reduced output struct for WebGL2 compatibility
-// Only pass colors_1 and colors_2 (4 stops max) and first half of offsets
-// Pack radial params into direction (they're mutually exclusive):
-//   - Linear: direction = start.xy, end.zw
-//   - Radial: direction = center.xy, radius.zw
-struct GradientVertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) colors_1: vec4<u32>,
-    @location(1) @interpolate(flat) colors_2: vec4<u32>,
-    @location(2) @interpolate(flat) offsets: vec4<f32>,
-    @location(3) direction: vec4<f32>,  // Linear: start/end, Radial: center/radius
-    @location(4) @interpolate(flat) gradient_type: u32,
+    // Skip colors_3 (loc 2) and colors_4 (loc 3) - not used in WebGL 4-stop mode
+    @location(2) @interpolate(flat) offsets: vec4<u32>,
+    @location(3) direction: vec4<f32>,
+    @location(4) gradient_type: u32,
+    // Skip _padding - not needed
     @location(5) position_and_scale: vec4<f32>,
     @location(6) border_color: vec4<f32>,
     @location(7) border_radius: vec4<f32>,
-    @location(8) @interpolate(flat) border_width: f32,
+    @location(8) border_width: f32,
+    @location(9) shadow_color: vec4<f32>,
+    @location(10) shadow_offset: vec2<f32>,
+    @location(11) shadow_blur_radius: f32,
+    // Packed: x = shadow_inset, y = snap
+    @location(12) flags: vec2<u32>,
+}
+
+// Reduced output struct for WebGL2 compatibility (max 31 inter-stage components)
+// Pack border_color and shadow_color as u32 to save 6 components
+// Pack gradient_type + shadow_inset into flags to save 1 component
+// Total: 4+4+4+4+4+1+4+1+1+2+1+1 = 31 components
+struct GradientVertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) @interpolate(flat) colors_1: vec4<u32>,       // 4 components
+    @location(1) @interpolate(flat) colors_2: vec4<u32>,       // 4 components
+    @location(2) @interpolate(flat) offsets: vec4<f32>,        // 4 components
+    @location(3) direction: vec4<f32>,                          // 4 components
+    @location(4) position_and_scale: vec4<f32>,                 // 4 components
+    @location(5) @interpolate(flat) border_color_packed: u32,  // 1 component (was 4)
+    @location(6) border_radius: vec4<f32>,                      // 4 components
+    @location(7) border_width: f32,                             // 1 component
+    @location(8) @interpolate(flat) shadow_color_packed: u32,  // 1 component (was 4)
+    @location(9) shadow_offset: vec2<f32>,                      // 2 components
+    @location(10) shadow_blur_radius: f32,                      // 1 component
+    @location(11) @interpolate(flat) flags: u32,               // 1 component (gradient_type + shadow_inset)
+}
+
+// Pack a vec4<f32> color (0.0-1.0) into a single u32 (RGBA8)
+fn pack_color_to_u32(color: vec4<f32>) -> u32 {
+    let r = u32(clamp(color.r, 0.0, 1.0) * 255.0);
+    let g = u32(clamp(color.g, 0.0, 1.0) * 255.0);
+    let b = u32(clamp(color.b, 0.0, 1.0) * 255.0);
+    let a = u32(clamp(color.a, 0.0, 1.0) * 255.0);
+    return (a << 24u) | (b << 16u) | (g << 8u) | r;
+}
+
+// Unpack a u32 (RGBA8) back to vec4<f32> color (0.0-1.0)
+fn unpack_u32_to_color(packed: u32) -> vec4<f32> {
+    let r = f32(packed & 0xFFu) / 255.0;
+    let g = f32((packed >> 8u) & 0xFFu) / 255.0;
+    let b = f32((packed >> 16u) & 0xFFu) / 255.0;
+    let a = f32((packed >> 24u) & 0xFFu) / 255.0;
+    return vec4<f32>(r, g, b, a);
 }
 
 @vertex
 fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     var out: GradientVertexOutput;
 
-    var pos: vec2<f32> = input.position_and_scale.xy * globals.scale;
-    var scale: vec2<f32> = input.position_and_scale.zw * globals.scale;
+    // Unpack input flags: x = shadow_inset, y = snap
+    let shadow_inset = bool(input.flags.x);
+    let snap = bool(input.flags.y);
+
+    // For outset shadows, expand the quad bounds to include shadow area
+    var shadow_expand = vec2<f32>(0.0, 0.0);
+    if !shadow_inset {
+        shadow_expand = min(input.shadow_offset, vec2<f32>(0.0, 0.0)) - input.shadow_blur_radius;
+    }
+
+    var pos: vec2<f32> = (input.position_and_scale.xy + shadow_expand) * globals.scale;
+    var scale_expand = vec2<f32>(0.0, 0.0);
+    if !shadow_inset {
+        scale_expand = vec2<f32>(abs(input.shadow_offset.x), abs(input.shadow_offset.y)) + input.shadow_blur_radius * 2.0;
+    }
+    var scale: vec2<f32> = (input.position_and_scale.zw + scale_expand) * globals.scale;
 
     var pos_snap = vec2<f32>(0.0, 0.0);
     var scale_snap = vec2<f32>(0.0, 0.0);
 
-    if bool(input.snap) {
+    if snap {
         pos_snap = round(pos + vec2(0.001, 0.001)) - pos;
         scale_snap = round(pos + scale + vec2(0.001, 0.001)) - pos - pos_snap - scale;
     }
@@ -78,16 +115,22 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     let offsets_packed: vec4<f32> = unpack_u32(input.offsets.xy);
     out.offsets = offsets_packed;
     
-    out.gradient_type = input.gradient_type;
-    
-    // direction contains: Linear: start.xy/end.zw, Radial: center.xy/radius.zw
-    // Just scale it uniformly
     out.direction = input.direction * globals.scale;
     
-    out.position_and_scale = vec4<f32>(pos + pos_snap, scale + scale_snap);
-    out.border_color = premultiply(input.border_color);
+    // Store original position/scale (without shadow expansion) for proper gradient sampling
+    out.position_and_scale = vec4<f32>(input.position_and_scale.xy * globals.scale + pos_snap, input.position_and_scale.zw * globals.scale + scale_snap);
+    
+    // Pack border_color and shadow_color into u32 to save inter-stage components
+    // Premultiply before packing
+    out.border_color_packed = pack_color_to_u32(premultiply(input.border_color));
     out.border_radius = border_radius * globals.scale;
     out.border_width = input.border_width * globals.scale;
+    out.shadow_color_packed = pack_color_to_u32(premultiply(input.shadow_color));
+    out.shadow_offset = input.shadow_offset * globals.scale;
+    out.shadow_blur_radius = input.shadow_blur_radius * globals.scale;
+    
+    // Pack gradient_type (low bits) + shadow_inset (bit 16) into flags
+    out.flags = input.gradient_type | (input.flags.x << 16u);
 
     return out;
 }
@@ -211,11 +254,19 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
+    // Unpack flags: low bits = gradient_type, bit 16 = shadow_inset
+    let gradient_type = input.flags & 0xFFFFu;
+    let shadow_inset = bool((input.flags >> 16u) & 1u);
+    
+    // Unpack colors from u32
+    let border_color = unpack_u32_to_color(input.border_color_packed);
+    let shadow_color = unpack_u32_to_color(input.shadow_color_packed);
+
     var mixed_color: vec4<f32>;
 
     // Check gradient type: 0 = linear, 1 = radial
     // direction contains: Linear: start.xy/end.zw, Radial: center.xy/radius.zw
-    if (input.gradient_type == 1u) {
+    if (gradient_type == 1u) {
         mixed_color = gradient_radial(
             input.position.xy,
             input.direction.xy,  // center (packed)
@@ -240,10 +291,39 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     if (input.border_width > 0.0) {
         mixed_color = mix(
             mixed_color,
-            input.border_color,
+            border_color,
             clamp(0.5 + dist + input.border_width, 0.0, 1.0)
         );
     }
 
-    return mixed_color * clamp(0.5-dist, 0.0, 1.0);
+    var quad_alpha: f32 = clamp(0.5-dist, 0.0, 1.0);
+
+    let quad_color = mixed_color * quad_alpha;
+
+    if shadow_color.a > 0.0 {
+        if shadow_inset {
+            // Inset shadow - draw inside the quad
+            var inset_shadow_dist: f32 = rounded_box_sdf(
+                -(input.position.xy - pos - input.shadow_offset - scale/2.0) * 2.0,
+                scale,
+                input.border_radius * 2.0
+            ) / 2.0;
+            // Invert the distance for inset effect
+            let inset_alpha = 1.0 - smoothstep(-input.shadow_blur_radius, input.shadow_blur_radius, max(-inset_shadow_dist, 0.0));
+            // Only apply shadow inside the quad (where quad_alpha > 0)
+            return mix(quad_color, shadow_color * quad_alpha, inset_alpha * quad_alpha);
+        } else {
+            // Outset shadow - draw outside the quad
+            var shadow_dist: f32 = rounded_box_sdf(
+                -(input.position.xy - pos - input.shadow_offset - scale/2.0) * 2.0,
+                scale,
+                input.border_radius * 2.0
+            ) / 2.0;
+            let shadow_alpha = 1.0 - smoothstep(-input.shadow_blur_radius, input.shadow_blur_radius, max(shadow_dist, 0.0));
+
+            return mix(quad_color, shadow_color, (1.0 - quad_alpha) * shadow_alpha);
+        }
+    } else {
+        return quad_color;
+    }
 }

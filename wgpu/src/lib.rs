@@ -1513,10 +1513,22 @@ impl core::Renderer for Renderer {
     fn start_post_blur_layer(&mut self, bounds: Rectangle) {
         log::trace!("start_post_blur_layer called: bounds={:?}", bounds);
 
-        // Push a new layer for post-blur content
-        // This ensures children are drawn to a dedicated layer that can be
-        // skipped in the main render pass and rendered after blur
-        self.layers.push_clip(bounds);
+        // Expand bounds to accommodate shadows that extend beyond the blur region.
+        // We use a generous margin since we don't know the actual shadow size here.
+        // Content outside the expanded bounds will still be clipped, but typical
+        // shadows (offset + blur_radius < 100px) will render correctly.
+        const SHADOW_MARGIN: f32 = 100.0;
+        let expanded_bounds = Rectangle {
+            x: bounds.x - SHADOW_MARGIN,
+            y: bounds.y - SHADOW_MARGIN,
+            width: bounds.width + SHADOW_MARGIN * 2.0,
+            height: bounds.height + SHADOW_MARGIN * 2.0,
+        };
+
+        // Push a new layer for post-blur content with expanded bounds
+        // This ensures children (including shadows) are drawn to a dedicated layer
+        // that can be skipped in the main render pass and rendered after blur
+        self.layers.push_clip(expanded_bounds);
         let layer_count = self.layers.active_count();
         log::trace!(
             "start_post_blur_layer: pushed layer, now have {} layers",
