@@ -184,49 +184,114 @@ impl Pipeline {
                             offset: 188,
                             shader_location: 11,
                         },
-                        // Shadow inset + snap (offset 192)
+                        // Shadow inset + snap + border_only (offset 192)
                         wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Uint32x2,
+                            format: wgpu::VertexFormat::Uint32x4,
                             offset: 192,
                             shader_location: 12,
                         },
                     ],
                     // Native has full 8 gradient stops with all fields
+                    // Use explicit offsets to match the Gradient struct layout
                     #[cfg(not(target_arch = "wasm32"))]
-                    attributes: &wgpu::vertex_attr_array!(
-                        // Colors 1-2
-                        0 => Uint32x4,
-                        // Colors 3-4
-                        1 => Uint32x4,
-                        // Colors 5-6
-                        2 => Uint32x4,
-                        // Colors 7-8
-                        3 => Uint32x4,
-                        // Offsets 1-8
-                        4 => Uint32x4,
-                        // Direction (linear: start/end, radial: center/radius)
-                        5 => Float32x4,
-                        // Gradient type (0=linear, 1=radial)
-                        6 => Uint32,
-                        // Padding (3 u32s)
-                        7 => Uint32x3,
-                        // Position & Scale
-                        8 => Float32x4,
-                        // Border color
-                        9 => Float32x4,
-                        // Border radius
-                        10 => Float32x4,
-                        // Border width
-                        11 => Float32,
-                        // Shadow color
-                        12 => Float32x4,
-                        // Shadow offset
-                        13 => Float32x2,
-                        // Shadow blur radius
-                        14 => Float32,
-                        // Shadow inset + snap (packed as vec2<u32>)
-                        15 => Uint32x2,
-                    ),
+                    attributes: &[
+                        // Colors 1-2 (offset 0)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32x4,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        // Colors 3-4 (offset 16)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32x4,
+                            offset: 16,
+                            shader_location: 1,
+                        },
+                        // Colors 5-6 (offset 32)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32x4,
+                            offset: 32,
+                            shader_location: 2,
+                        },
+                        // Colors 7-8 (offset 48)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32x4,
+                            offset: 48,
+                            shader_location: 3,
+                        },
+                        // Offsets 1-8 (offset 64)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32x4,
+                            offset: 64,
+                            shader_location: 4,
+                        },
+                        // Direction (offset 80)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 80,
+                            shader_location: 5,
+                        },
+                        // Gradient type (offset 96)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32,
+                            offset: 96,
+                            shader_location: 6,
+                        },
+                        // Padding (offset 100) - 3 u32s
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32x3,
+                            offset: 100,
+                            shader_location: 7,
+                        },
+                        // Position & Scale (offset 112) - start of Quad
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 112,
+                            shader_location: 8,
+                        },
+                        // Border color (offset 128)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 128,
+                            shader_location: 9,
+                        },
+                        // Border radius (offset 144)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 144,
+                            shader_location: 10,
+                        },
+                        // Border width (offset 160)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 160,
+                            shader_location: 11,
+                        },
+                        // Shadow color (offset 164)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 164,
+                            shader_location: 12,
+                        },
+                        // Shadow offset (offset 180)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 180,
+                            shader_location: 13,
+                        },
+                        // Shadow blur radius (offset 188)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 188,
+                            shader_location: 14,
+                        },
+                        // Shadow inset + snap + border_only + padding (offset 192)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32x4,
+                            offset: 192,
+                            shader_location: 15,
+                        },
+                    ],
                 }],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },

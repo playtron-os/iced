@@ -192,6 +192,12 @@ pub struct Quad {
 
     /// Whether the [`Quad`] should be snapped to the pixel grid.
     pub snap: bool,
+
+    /// Whether only the border should be rendered (clip the interior).
+    /// When true, the background fills only the border region, not the interior.
+    /// This is useful for gradient borders where you want the gradient to appear
+    /// only in the border area.
+    pub border_only: bool,
 }
 
 impl Default for Quad {
@@ -201,6 +207,7 @@ impl Default for Quad {
             border: Border::default(),
             shadow: Shadow::default(),
             snap: CRISP,
+            border_only: false,
         }
     }
 }

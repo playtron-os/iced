@@ -15,8 +15,8 @@ struct GradientVertexInput {
     @location(12) shadow_color: vec4<f32>,
     @location(13) shadow_offset: vec2<f32>,
     @location(14) shadow_blur_radius: f32,
-    // Packed: x = shadow_inset, y = snap
-    @location(15) flags: vec2<u32>,
+    // Packed: x = shadow_inset, y = snap, z = border_only, w = padding
+    @location(15) flags: vec4<u32>,
 }
 
 struct GradientVertexOutput {
@@ -36,13 +36,14 @@ struct GradientVertexOutput {
     @location(12) shadow_offset: vec2<f32>,
     @location(13) shadow_blur_radius: f32,
     @location(14) @interpolate(flat) shadow_inset: u32,
+    @location(15) @interpolate(flat) border_only: u32,
 }
 
 @vertex
 fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     var out: GradientVertexOutput;
 
-    // Unpack flags: x = shadow_inset, y = snap
+    // Unpack flags: x = shadow_inset, y = snap, z = border_only
     let shadow_inset = bool(input.flags.x);
     let snap = bool(input.flags.y);
 
@@ -106,6 +107,7 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.shadow_offset = input.shadow_offset * globals.scale;
     out.shadow_blur_radius = input.shadow_blur_radius * globals.scale;
     out.shadow_inset = input.flags.x;
+    out.border_only = input.flags.z;
 
     return out;
 }
@@ -319,6 +321,29 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         scale,
         input.border_radius * 2.0
     ) / 2.0;
+
+    // Handle border_only mode: gradient fills only the border region
+    if (bool(input.border_only) && input.border_width > 0.0) {
+        // dist is negative inside the quad, positive outside
+        // Calculate inner boundary distance (where interior starts)
+        let inner_dist = dist + input.border_width;
+        
+        // outer_alpha: 1.0 inside quad edge, 0.0 outside  
+        // This fades in as we cross the outer boundary (dist goes from positive to negative)
+        let outer_alpha = clamp(0.5 - dist, 0.0, 1.0);
+        
+        // inner_alpha: 0.0 in border region, 1.0 in interior
+        // When inner_dist < 0 (in border or outside), we want this to be 0
+        // When inner_dist > 0 (in interior), we want this to be 1
+        let inner_alpha = clamp(0.5 - inner_dist, 0.0, 1.0);
+        
+        // Border region is inside the outer edge but outside the inner edge
+        // outer_alpha = 1, inner_alpha = 0 → border_alpha = 1
+        // outer_alpha = 1, inner_alpha = 1 → border_alpha = 0 (interior - hidden)
+        let border_alpha = outer_alpha * (1.0 - inner_alpha);
+        
+        return mixed_color * border_alpha;
+    }
 
     if (input.border_width > 0.0) {
         mixed_color = mix(

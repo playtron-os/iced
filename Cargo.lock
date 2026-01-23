@@ -2038,6 +2038,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gradient_border"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "iced",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "gradient_fade_widget"
 version = "0.1.0"
 dependencies = [

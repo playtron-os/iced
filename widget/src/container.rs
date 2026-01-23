@@ -426,6 +426,7 @@ where
                 border: style.border,
                 shadow: style.shadow,
                 snap: style.snap,
+                border_only: style.border_only,
             },
             style
                 .background
@@ -447,6 +448,11 @@ pub struct Style {
     pub shadow: Shadow,
     /// Whether the container should be snapped to the pixel grid.
     pub snap: bool,
+    /// Whether only the border should be rendered (background fills border area only).
+    /// When true, the background gradient fills only the border region, not the interior.
+    /// This is useful for gradient borders where you want the gradient to appear
+    /// only in the border area.
+    pub border_only: bool,
 }
 
 impl Default for Style {
@@ -457,6 +463,7 @@ impl Default for Style {
             border: Border::default(),
             shadow: Shadow::default(),
             snap: renderer::CRISP,
+            border_only: false,
         }
     }
 }
@@ -490,6 +497,16 @@ impl Style {
     pub fn shadow(self, shadow: impl Into<Shadow>) -> Self {
         Self {
             shadow: shadow.into(),
+            ..self
+        }
+    }
+
+    /// Sets whether only the border should be rendered.
+    /// When true, the background fills only the border region, not the interior.
+    /// This is useful for gradient borders.
+    pub fn border_only(self, border_only: bool) -> Self {
+        Self {
+            border_only,
             ..self
         }
     }

@@ -368,6 +368,7 @@ where
                     border: style.border,
                     shadow: style.shadow,
                     snap: style.snap,
+                    border_only: false,
                 },
                 style
                     .background

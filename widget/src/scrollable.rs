@@ -1329,6 +1329,7 @@ where
                     border: style.border,
                     shadow: style.shadow,
                     snap: false,
+                    border_only: false,
                 },
                 style.background,
             );

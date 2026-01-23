@@ -21,13 +21,13 @@ struct GradientVertexInput {
     @location(9) shadow_color: vec4<f32>,
     @location(10) shadow_offset: vec2<f32>,
     @location(11) shadow_blur_radius: f32,
-    // Packed: x = shadow_inset, y = snap
-    @location(12) flags: vec2<u32>,
+    // Packed: x = shadow_inset, y = snap, z = border_only, w = padding
+    @location(12) flags: vec4<u32>,
 }
 
 // Reduced output struct for WebGL2 compatibility (max 31 inter-stage components)
 // Pack border_color and shadow_color as u32 to save 6 components
-// Pack gradient_type + shadow_inset into flags to save 1 component
+// Pack gradient_type + shadow_inset + border_only into flags to save components
 // Total: 4+4+4+4+4+1+4+1+1+2+1+1 = 31 components
 struct GradientVertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -42,7 +42,7 @@ struct GradientVertexOutput {
     @location(8) @interpolate(flat) shadow_color_packed: u32,  // 1 component (was 4)
     @location(9) shadow_offset: vec2<f32>,                      // 2 components
     @location(10) shadow_blur_radius: f32,                      // 1 component
-    @location(11) @interpolate(flat) flags: u32,               // 1 component (gradient_type + shadow_inset)
+    @location(11) @interpolate(flat) flags: u32,               // 1 component (gradient_type + shadow_inset + border_only)
 }
 
 // Pack a vec4<f32> color (0.0-1.0) into a single u32 (RGBA8)
@@ -67,9 +67,10 @@ fn unpack_u32_to_color(packed: u32) -> vec4<f32> {
 fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     var out: GradientVertexOutput;
 
-    // Unpack input flags: x = shadow_inset, y = snap
+    // Unpack input flags: x = shadow_inset, y = snap, z = border_only
     let shadow_inset = bool(input.flags.x);
     let snap = bool(input.flags.y);
+    let border_only = input.flags.z;
 
     // For outset shadows, expand the quad bounds to include shadow area
     var shadow_expand = vec2<f32>(0.0, 0.0);
@@ -135,8 +136,8 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.shadow_offset = input.shadow_offset * globals.scale;
     out.shadow_blur_radius = input.shadow_blur_radius * globals.scale;
     
-    // Pack gradient_type (low bits) + shadow_inset (bit 16) into flags
-    out.flags = input.gradient_type | (input.flags.x << 16u);
+    // Pack gradient_type (bits 0-15) + shadow_inset (bit 16) + border_only (bit 17) into flags
+    out.flags = input.gradient_type | (input.flags.x << 16u) | (border_only << 17u);
 
     return out;
 }
@@ -316,9 +317,10 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // Unpack flags: low bits = gradient_type, bit 16 = shadow_inset
+    // Unpack flags: low bits = gradient_type, bit 16 = shadow_inset, bit 17 = border_only
     let gradient_type = input.flags & 0xFFFFu;
     let shadow_inset = bool((input.flags >> 16u) & 1u);
+    let border_only = bool((input.flags >> 17u) & 1u);
     
     // Unpack colors from u32
     let border_color = unpack_u32_to_color(input.border_color_packed);
@@ -358,6 +360,29 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         scale,
         input.border_radius * 2.0
     ) / 2.0;
+
+    // Handle border_only mode: gradient fills only the border region
+    if (border_only && input.border_width > 0.0) {
+        // dist is negative inside the quad, positive outside
+        // Calculate inner boundary distance (where interior starts)
+        let inner_dist = dist + input.border_width;
+        
+        // outer_alpha: 1.0 inside quad edge, 0.0 outside  
+        // This fades in as we cross the outer boundary (dist goes from positive to negative)
+        let outer_alpha = clamp(0.5 - dist, 0.0, 1.0);
+        
+        // inner_alpha: 0.0 in border region, 1.0 in interior
+        // When inner_dist < 0 (in border or outside), we want this to be 0
+        // When inner_dist > 0 (in interior), we want this to be 1
+        let inner_alpha = clamp(0.5 - inner_dist, 0.0, 1.0);
+        
+        // Border region is inside the outer edge but outside the inner edge
+        // outer_alpha = 1, inner_alpha = 0 → border_alpha = 1
+        // outer_alpha = 1, inner_alpha = 1 → border_alpha = 0 (interior - hidden)
+        let border_alpha = outer_alpha * (1.0 - inner_alpha);
+        
+        return mixed_color * border_alpha;
+    }
 
     if (input.border_width > 0.0) {
         mixed_color = mix(
