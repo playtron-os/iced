@@ -225,7 +225,7 @@ where
         _state: &Tree,
         renderer: &mut Renderer,
         theme: &Theme,
-        _style: &renderer::Style,
+        style: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
@@ -256,12 +256,17 @@ where
 
         let drawing_bounds = Rectangle::new(position, final_size);
 
-        let style = theme.style(&self.class, self.status.unwrap_or(Status::Idle));
+        let svg_style = theme.style(&self.class, self.status.unwrap_or(Status::Idle));
+
+        // If the SVG style has no color set, inherit from the parent's text_color.
+        // This allows SVGs inside buttons to automatically use the button's text color,
+        // which changes based on button state (hovered, pressed, disabled).
+        let color = svg_style.color.or(Some(style.text_color));
 
         renderer.draw_svg(
             svg::Svg {
                 handle: self.handle.clone(),
-                color: style.color,
+                color,
                 rotation: self.rotation.radians(),
                 opacity: self.opacity,
             },
