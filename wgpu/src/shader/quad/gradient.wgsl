@@ -210,6 +210,7 @@ fn gradient_radial(
 }
 
 /// Returns the current interpolated color with a max 8-stop conic (angular) gradient
+/// For conic gradients, the gradient wraps around: after the last stop, it interpolates back to the first stop.
 fn gradient_conic(
     raw_position: vec2<f32>,
     center: vec2<f32>,
@@ -241,24 +242,36 @@ fn gradient_conic(
 
     let noise_granularity: f32 = 0.3/255.0;
 
-    for (var i: i32 = 0; i < last_index; i++) {
-        let curr_offset = offsets_arr[i];
-        let next_offset = offsets_arr[i+1];
+    // Handle wrap-around: if past the last stop, interpolate back to first stop
+    if (coord_offset >= offsets_arr[last_index]) {
+        let from_ = colors_arr[last_index];
+        let to_ = colors_arr[0];
+        // Calculate factor for wrap-around segment (from last_offset to 1.0, then 0.0 to first_offset)
+        let wrap_length = (1.0 - offsets_arr[last_index]) + offsets_arr[0];
+        let dist_from_last = coord_offset - offsets_arr[last_index];
+        let factor = dist_from_last / wrap_length;
+        color = interpolate_color(from_, to_, factor);
+    } else if (coord_offset <= offsets_arr[0]) {
+        // Before first stop - also part of wrap-around from last stop
+        let from_ = colors_arr[last_index];
+        let to_ = colors_arr[0];
+        let wrap_length = (1.0 - offsets_arr[last_index]) + offsets_arr[0];
+        let dist_from_last = (1.0 - offsets_arr[last_index]) + coord_offset;
+        let factor = dist_from_last / wrap_length;
+        color = interpolate_color(from_, to_, factor);
+    } else {
+        // Normal case: between two consecutive stops
+        for (var i: i32 = 0; i < last_index; i++) {
+            let curr_offset = offsets_arr[i];
+            let next_offset = offsets_arr[i+1];
 
-        if (coord_offset <= offsets_arr[0]) {
-            color = colors_arr[0];
-        }
-
-        if (curr_offset <= coord_offset && coord_offset <= next_offset) {
-            let from_ = colors_arr[i];
-            let to_ = colors_arr[i+1];
-            let factor = smoothstep(curr_offset, next_offset, coord_offset);
-
-            color = interpolate_color(from_, to_, factor);
-        }
-
-        if (coord_offset >= offsets_arr[last_index]) {
-            color = colors_arr[last_index];
+            if (curr_offset <= coord_offset && coord_offset <= next_offset) {
+                let from_ = colors_arr[i];
+                let to_ = colors_arr[i+1];
+                let factor = smoothstep(curr_offset, next_offset, coord_offset);
+                color = interpolate_color(from_, to_, factor);
+                break;
+            }
         }
     }
 
