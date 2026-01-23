@@ -572,6 +572,10 @@ impl Transform {
                 radial.radius_x *= scale_x;
                 radial.radius_y *= scale_y;
             }
+            Gradient::Conic(conic) => {
+                conic.center = self.transform_point(conic.center);
+                // Angle doesn't need transformation
+            }
         }
 
         gradient

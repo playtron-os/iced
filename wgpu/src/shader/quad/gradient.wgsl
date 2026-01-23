@@ -89,7 +89,13 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.colors_3 = input.colors_3;
     out.colors_4 = input.colors_4;
     out.offsets = input.offsets;
-    out.direction = input.direction * globals.scale;
+    // For conic gradients (type 2), direction.z is angle in radians - don't scale it
+    // For linear/radial, all components are coordinates that need scaling
+    if (input.gradient_type == 2u) {
+        out.direction = vec4<f32>(input.direction.xy * globals.scale, input.direction.z, input.direction.w);
+    } else {
+        out.direction = input.direction * globals.scale;
+    }
     out.gradient_type = input.gradient_type;
     // Store original position/scale (without shadow expansion) for proper gradient sampling
     out.position_and_scale = vec4<f32>(input.position_and_scale.xy * globals.scale + pos_snap, input.position_and_scale.zw * globals.scale + scale_snap);
@@ -201,6 +207,62 @@ fn gradient_radial(
     return color + mix(-noise_granularity, noise_granularity, random(raw_position));
 }
 
+/// Returns the current interpolated color with a max 8-stop conic (angular) gradient
+fn gradient_conic(
+    raw_position: vec2<f32>,
+    center: vec2<f32>,
+    start_angle: f32,
+    colors: array<vec4<f32>, 8>,
+    offsets: array<f32, 8>,
+    last_index: i32
+) -> vec4<f32> {
+    let PI: f32 = 3.141592653589793;
+    let TWO_PI: f32 = 6.283185307179586;
+    
+    // Calculate vector from center to current position
+    let diff = raw_position - center;
+    
+    // Compute angle using atan2
+    // Note: In screen coordinates, Y increases downward, so we negate Y
+    // to get standard mathematical angles (counterclockwise from right)
+    let angle = atan2(-diff.y, diff.x);
+    
+    // Normalize to [0, 1] range, accounting for start angle
+    // Add TWO_PI before fract to ensure positive result
+    let normalized = (angle - start_angle + TWO_PI) / TWO_PI;
+    let coord_offset = fract(normalized);
+
+    var colors_arr = colors;
+    var offsets_arr = offsets;
+
+    var color: vec4<f32>;
+
+    let noise_granularity: f32 = 0.3/255.0;
+
+    for (var i: i32 = 0; i < last_index; i++) {
+        let curr_offset = offsets_arr[i];
+        let next_offset = offsets_arr[i+1];
+
+        if (coord_offset <= offsets_arr[0]) {
+            color = colors_arr[0];
+        }
+
+        if (curr_offset <= coord_offset && coord_offset <= next_offset) {
+            let from_ = colors_arr[i];
+            let to_ = colors_arr[i+1];
+            let factor = smoothstep(curr_offset, next_offset, coord_offset);
+
+            color = interpolate_color(from_, to_, factor);
+        }
+
+        if (coord_offset >= offsets_arr[last_index]) {
+            color = colors_arr[last_index];
+        }
+    }
+
+    return color + mix(-noise_granularity, noise_granularity, random(raw_position));
+}
+
 @fragment
 fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     let colors = array<vec4<f32>, 8>(
@@ -239,9 +301,11 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
 
     var mixed_color: vec4<f32>;
 
-    // Check gradient type: 0 = linear, 1 = radial
-    // direction contains: Linear: start.xy/end.zw, Radial: center.xy/radius.zw
-    if (input.gradient_type == 1u) {
+    // Check gradient type: 0 = linear, 1 = radial, 2 = conic
+    // direction contains: Linear: start.xy/end.zw, Radial: center.xy/radius.zw, Conic: center.xy/angle.z
+    if (input.gradient_type == 2u) {
+        mixed_color = gradient_conic(input.position.xy, input.direction.xy, input.direction.z, colors, offsets, last_index);
+    } else if (input.gradient_type == 1u) {
         mixed_color = gradient_radial(input.position.xy, input.direction.xy, input.direction.zw, colors, offsets, last_index);
     } else {
         mixed_color = gradient_linear(input.position.xy, input.direction, colors, offsets, last_index);

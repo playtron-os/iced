@@ -219,6 +219,19 @@ impl Engine {
                         )
                         .expect("Create radial gradient")
                     }
+                    Background::Gradient(Gradient::Conic(conic)) => {
+                        // tiny_skia doesn't support conic gradients natively.
+                        // Fall back to a solid color from the first stop.
+                        let color = conic
+                            .stops
+                            .iter()
+                            .flatten()
+                            .next()
+                            .map(|stop| stop.color)
+                            .unwrap_or(Color::TRANSPARENT);
+
+                        tiny_skia::Shader::SolidColor(into_color(color))
+                    }
                 },
                 anti_alias: true,
                 ..tiny_skia::Paint::default()

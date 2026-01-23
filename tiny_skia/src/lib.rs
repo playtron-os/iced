@@ -227,6 +227,11 @@ fn apply_opacity(
                         color_stop.color.a *= opacity;
                     }
                 }
+                core::Gradient::Conic(conic) => {
+                    for color_stop in conic.stops.iter_mut().flatten() {
+                        color_stop.color.a *= opacity;
+                    }
+                }
             }
             Background::Gradient(gradient)
         }

@@ -39,3 +39,9 @@ impl From<gradient::Linear> for Background {
         Background::Gradient(Gradient::Linear(gradient))
     }
 }
+
+impl From<gradient::Conic> for Background {
+    fn from(gradient: gradient::Conic) -> Self {
+        Background::Gradient(Gradient::Conic(gradient))
+    }
+}

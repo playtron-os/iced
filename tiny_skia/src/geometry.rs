@@ -475,6 +475,22 @@ pub fn into_paint(style: Style) -> tiny_skia::Paint<'static> {
                     )
                     .expect("Create radial gradient")
                 }
+                Gradient::Conic(conic) => {
+                    // tiny_skia doesn't support conic gradients natively.
+                    // Fall back to a solid color from the first stop.
+                    let color = conic
+                        .stops
+                        .into_iter()
+                        .flatten()
+                        .next()
+                        .map(|stop| stop.color)
+                        .unwrap_or(core::Color::TRANSPARENT);
+
+                    tiny_skia::Shader::SolidColor(
+                        tiny_skia::Color::from_rgba(color.b, color.g, color.r, color.a)
+                            .expect("Create color"),
+                    )
+                }
             },
         },
         anti_alias: true,

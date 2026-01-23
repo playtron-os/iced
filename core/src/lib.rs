@@ -60,7 +60,7 @@ pub use content_fit::ContentFit;
 pub use element::Element;
 pub use event::Event;
 pub use font::Font;
-pub use gradient::Gradient;
+pub use gradient::{Conic, Gradient};
 pub use image::Image;
 pub use input_method::InputMethod;
 pub use layout::Layout;
