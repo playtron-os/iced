@@ -7,6 +7,7 @@ use crate::core::keyboard;
 use crate::core::mouse;
 use crate::core::theme;
 use crate::core::touch;
+use crate::core::voice_mode;
 use crate::core::window;
 use crate::core::{Event, Point, Size};
 
@@ -304,6 +305,9 @@ pub fn window_event(
         }
         WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
             Some(Event::Window(window::Event::Rescaled(scale_factor as f32)))
+        }
+        WindowEvent::VoiceMode(voice_event) => {
+            Some(Event::VoiceMode(voice_mode_event(voice_event)))
         }
         _ => None,
     }
@@ -1146,4 +1150,28 @@ pub fn ime_purpose(purpose: input_method::Purpose) -> winit::window::ImePurpose 
 // See: https://en.wikipedia.org/wiki/Private_Use_Areas
 fn is_private_use(c: char) -> bool {
     ('\u{E000}'..='\u{F8FF}').contains(&c)
+}
+
+/// Converts a winit voice mode event into an iced voice mode event.
+fn voice_mode_event(event: winit::event::VoiceModeWindowEvent) -> voice_mode::Event {
+    use winit::event::VoiceModeWindowEvent;
+
+    match event {
+        VoiceModeWindowEvent::Start { orb_state } => voice_mode::Event::Started {
+            orb_state: match orb_state {
+                winit::event::VoiceModeOrbState::Hidden => voice_mode::OrbState::Hidden,
+                winit::event::VoiceModeOrbState::Floating => voice_mode::OrbState::Floating,
+                winit::event::VoiceModeOrbState::Attached => voice_mode::OrbState::Attached,
+                winit::event::VoiceModeOrbState::Frozen => voice_mode::OrbState::Frozen,
+                winit::event::VoiceModeOrbState::Transitioning => voice_mode::OrbState::Transitioning,
+            },
+        },
+        VoiceModeWindowEvent::Stop => voice_mode::Event::Stopped,
+        VoiceModeWindowEvent::Cancel => voice_mode::Event::Cancelled,
+        VoiceModeWindowEvent::OrbAttached { x, y, width, height } => {
+            voice_mode::Event::OrbAttached { x, y, width, height }
+        }
+        VoiceModeWindowEvent::OrbDetached => voice_mode::Event::OrbDetached,
+        VoiceModeWindowEvent::WillStop { serial } => voice_mode::Event::WillStop { serial },
+    }
 }

@@ -237,6 +237,23 @@ pub enum Action {
     /// When enabled, all other windows are hidden. When disabled, other windows are restored.
     /// Parameters are (window_id, exclusive).
     SetExclusiveMode(Id, bool),
+
+    /// Register the window to receive voice mode events (COSMIC compositor protocol).
+    /// Parameters are (window_id, is_default_receiver).
+    /// When is_default_receiver is true, this window receives events when no other receiver is active.
+    RegisterVoiceMode(Id, bool),
+
+    /// Unregister the window from receiving voice mode events (COSMIC compositor protocol).
+    UnregisterVoiceMode(Id),
+
+    /// Set the audio level for voice mode visualization (COSMIC compositor protocol).
+    /// Level is 0-1000 where 0 is silence and 1000 is maximum volume.
+    SetVoiceAudioLevel(u32),
+
+    /// Acknowledge a will_stop event from the compositor (COSMIC compositor protocol).
+    /// If freeze is true, the orb will freeze in place for processing.
+    /// If freeze is false, the orb will proceed with hiding.
+    VoiceAckStop(Id, u32, bool),
 }
 
 /// A window managed by iced.
@@ -310,6 +327,20 @@ pub fn close_requests() -> Subscription<Id> {
     event::listen_with(|event, _status, id| {
         if let crate::core::Event::Window(Event::CloseRequested) = event {
             Some(id)
+        } else {
+            None
+        }
+    })
+}
+
+/// Subscribes to all voice mode events in the running application.
+///
+/// Returns the window ID and the voice mode event. You must call
+/// [`register_voice_mode`] on a window before it will receive these events.
+pub fn voice_mode_events() -> Subscription<(Id, crate::core::voice_mode::Event)> {
+    event::listen_with(|event, _status, id| {
+        if let crate::core::Event::VoiceMode(voice_event) = event {
+            Some((id, voice_event))
         } else {
             None
         }
@@ -767,4 +798,60 @@ pub fn set_exclusive_mode<T>(id: Id, exclusive: bool) -> Task<T> {
     task::effect(crate::Action::Window(Action::SetExclusiveMode(
         id, exclusive,
     )))
+}
+
+/// Registers the window to receive voice mode events from the compositor.
+///
+/// When `is_default_receiver` is true, this window will receive voice mode events
+/// even when it doesn't have focus. Only one window should be the default receiver.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_voice_mode_v1` protocol.
+/// - **Other platforms:** No effect.
+pub fn register_voice_mode<T>(id: Id, is_default_receiver: bool) -> Task<T> {
+    task::effect(crate::Action::Window(Action::RegisterVoiceMode(
+        id,
+        is_default_receiver,
+    )))
+}
+
+/// Unregisters the window from receiving voice mode events.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_voice_mode_v1` protocol.
+/// - **Other platforms:** No effect.
+pub fn unregister_voice_mode<T>(id: Id) -> Task<T> {
+    task::effect(crate::Action::Window(Action::UnregisterVoiceMode(id)))
+}
+
+/// Sets the audio level for voice mode visualization.
+///
+/// This sends the current audio input level to the compositor so it can
+/// animate the voice orb based on voice activity.
+///
+/// ## Parameters
+/// - `level`: Audio level from 0-1000, where 0 is silence and 1000 is maximum volume.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_voice_mode_v1` protocol's `set_audio_level` request.
+/// - **Other platforms:** No effect.
+pub fn set_voice_audio_level<T>(level: u32) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetVoiceAudioLevel(level)))
+}
+
+/// Acknowledges a will_stop event from the compositor.
+///
+/// This responds to a will_stop event, telling the compositor whether to
+/// freeze the orb (transcription processing) or proceed with hiding.
+///
+/// ## Arguments
+/// * `id` - The window ID of the voice mode receiver
+/// * `serial` - The serial from the will_stop event
+/// * `freeze` - If true, freeze the orb in place. If false, proceed with hiding.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_voice_mode_v1` protocol's `ack_stop` request.
+/// - **Other platforms:** No effect.
+pub fn voice_ack_stop<T>(id: Id, serial: u32, freeze: bool) -> Task<T> {
+    task::effect(crate::Action::Window(Action::VoiceAckStop(id, serial, freeze)))
 }

@@ -621,6 +621,11 @@ pub mod touch {
     pub use crate::core::touch::{Event, Finger};
 }
 
+pub mod voice_mode {
+    //! Listen and react to voice mode events from the compositor.
+    pub use crate::core::voice_mode::{Event, OrbState};
+}
+
 #[allow(hidden_glob_reexports)]
 pub mod widget {
     //! Use the built-in widgets or create your own.

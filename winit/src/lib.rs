@@ -1858,6 +1858,80 @@ fn run_action<'a, P, C>(
                     }
                 }
             }
+            window::Action::RegisterVoiceMode(id, is_default) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.register_voice_mode(is_default);
+                    }
+                }
+            }
+            window::Action::UnregisterVoiceMode(id) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.unregister_voice_mode();
+                    }
+                }
+            }
+            window::Action::SetVoiceAudioLevel(level) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    // Send audio level to first registered window (audio level is global)
+                    for (_id, window) in window_manager.iter_mut() {
+                        let _ = window.raw.set_voice_audio_level(level);
+                        break;
+                    }
+                }
+            }
+            window::Action::VoiceAckStop(id, serial, freeze) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.voice_ack_stop(serial, freeze);
+                    }
+                }
+            }
         },
         Action::System(action) => match action {
             system::Action::GetInformation(_channel) => {

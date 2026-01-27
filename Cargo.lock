@@ -1366,7 +1366,7 @@ dependencies = [
 [[package]]
 name = "dpi"
 version = "0.1.1"
-source = "git+https://github.com/playtron-os/winit.git?rev=29ba18b4#29ba18b4f38f729f6f3b615ea7891a878f4a4126"
+source = "git+https://github.com/playtron-os/winit.git?rev=aa25eb11#aa25eb1121a4a0556968081deb17158495c13e83"
 
 [[package]]
 name = "editor"
@@ -7605,7 +7605,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.30.12"
-source = "git+https://github.com/playtron-os/winit.git?rev=29ba18b4#29ba18b4f38f729f6f3b615ea7891a878f4a4126"
+source = "git+https://github.com/playtron-os/winit.git?rev=aa25eb11#aa25eb1121a4a0556968081deb17158495c13e83"
 dependencies = [
  "ahash",
  "android-activity",
