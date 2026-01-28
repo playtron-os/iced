@@ -480,6 +480,9 @@ impl editor::Editor for Editor {
                         buffer_mut.set_scroll(scroll_after);
                     }
                 }
+                Action::Focus => {
+                    // Focus is handled by the widget layer, not the editor
+                }
             }
         });
     }

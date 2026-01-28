@@ -93,6 +93,8 @@ pub enum Action {
         /// The amount of lines to scroll.
         lines: i32,
     },
+    /// Focus the [`Editor`].
+    Focus,
 }
 
 impl Action {
