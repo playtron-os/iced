@@ -360,6 +360,8 @@ where
     R: text::Renderer,
 {
     editor: R::Editor,
+    /// Flag indicating focus was requested via Action::Focus
+    pending_focus: bool,
 }
 
 impl<R> Content<R>
@@ -375,12 +377,17 @@ where
     pub fn with_text(text: &str) -> Self {
         Self(RefCell::new(Internal {
             editor: R::Editor::with_text(text),
+            pending_focus: false,
         }))
     }
 
     /// Performs an [`Action`] on the [`Content`].
     pub fn perform(&mut self, action: Action) {
         let internal = self.0.get_mut();
+
+        if matches!(action, Action::Focus) {
+            internal.pending_focus = true;
+        }
 
         internal.editor.perform(action);
     }
@@ -454,6 +461,16 @@ where
     /// Returns whether or not the the [`Content`] is empty.
     pub fn is_empty(&self) -> bool {
         self.0.borrow().editor.is_empty()
+    }
+
+    /// Takes the pending focus flag, returning true if focus was requested.
+    ///
+    /// This is used internally by the widget to check if `Action::Focus` was called.
+    pub(crate) fn take_pending_focus(&self) -> bool {
+        let mut internal = self.0.borrow_mut();
+        let was_pending = internal.pending_focus;
+        internal.pending_focus = false;
+        was_pending
     }
 }
 
@@ -656,6 +673,13 @@ where
         };
 
         let state = tree.state.downcast_mut::<State<Highlighter>>();
+
+        // Check if focus was requested via Action::Focus
+        if self.content.take_pending_focus() && state.focus.is_none() {
+            state.focus = Some(Focus::now());
+            shell.request_redraw();
+        }
+
         let is_redraw = matches!(event, Event::Window(window::Event::RedrawRequested(_now)),);
 
         match event {
