@@ -254,6 +254,10 @@ pub enum Action {
     /// If freeze is true, the orb will freeze in place for processing.
     /// If freeze is false, the orb will proceed with hiding.
     VoiceAckStop(Id, u32, bool),
+
+    /// Dismiss the frozen voice orb (COSMIC compositor protocol).
+    /// Used when transcription completes without spawning a new window.
+    VoiceDismiss(Id),
 }
 
 /// A window managed by iced.
@@ -854,4 +858,19 @@ pub fn set_voice_audio_level<T>(level: u32) -> Task<T> {
 /// - **Other platforms:** No effect.
 pub fn voice_ack_stop<T>(id: Id, serial: u32, freeze: bool) -> Task<T> {
     task::effect(crate::Action::Window(Action::VoiceAckStop(id, serial, freeze)))
+}
+
+/// Dismisses the frozen voice orb.
+///
+/// This tells the compositor to hide the orb when transcription completes
+/// without spawning a new window (e.g., empty result or error).
+///
+/// ## Arguments
+/// * `id` - The window ID of the voice mode receiver
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses `zcosmic_voice_mode_v1` protocol's `dismiss` request.
+/// - **Other platforms:** No effect.
+pub fn voice_dismiss<T>(id: Id) -> Task<T> {
+    task::effect(crate::Action::Window(Action::VoiceDismiss(id)))
 }
