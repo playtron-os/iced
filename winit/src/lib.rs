@@ -1394,14 +1394,7 @@ fn run_action<'a, P, C>(
                     }
                 }
             }
-            window::Action::AnimatedResizeWithPosition(
-                id,
-                x,
-                y,
-                width,
-                height,
-                duration_ms,
-            ) => {
+            window::Action::AnimatedResizeWithPosition(id, x, y, width, height, duration_ms) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     #[cfg(all(
                         feature = "wayland",
@@ -1696,7 +1689,13 @@ fn run_action<'a, P, C>(
                     use winit::platform::wayland::WindowExtWayland;
                     if let Some(window) = window_manager.get_mut(id) {
                         let result = window.raw.embed_toplevel_by_pid(
-                            pid, &app_id, x, y, width, height, interactive,
+                            pid,
+                            &app_id,
+                            x,
+                            y,
+                            width,
+                            height,
+                            interactive,
                         );
                         let _ = channel.send(result);
                     } else {

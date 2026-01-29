@@ -857,7 +857,9 @@ pub fn set_voice_audio_level<T>(level: u32) -> Task<T> {
 /// - **COSMIC/Wayland:** Uses `zcosmic_voice_mode_v1` protocol's `ack_stop` request.
 /// - **Other platforms:** No effect.
 pub fn voice_ack_stop<T>(id: Id, serial: u32, freeze: bool) -> Task<T> {
-    task::effect(crate::Action::Window(Action::VoiceAckStop(id, serial, freeze)))
+    task::effect(crate::Action::Window(Action::VoiceAckStop(
+        id, serial, freeze,
+    )))
 }
 
 /// Dismisses the frozen voice orb.

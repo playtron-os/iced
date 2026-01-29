@@ -31,6 +31,10 @@ where
     class: Theme::Class<'a>,
     hovered_link: Option<usize>,
     on_link_click: Option<Box<dyn Fn(Link) -> Message + 'a>>,
+    /// Optional selection range (start_char, end_char) within this widget's text
+    selection: Option<(usize, usize)>,
+    /// Color for selection highlight
+    selection_color: Option<Color>,
 }
 
 impl<'a, Link, Message, Theme, Renderer> Rich<'a, Link, Message, Theme, Renderer>
@@ -55,6 +59,8 @@ where
             class: Theme::default(),
             hovered_link: None,
             on_link_click: None,
+            selection: None,
+            selection_color: None,
         }
     }
 
@@ -128,6 +134,20 @@ where
     /// the proper `Link` generic type.
     pub fn on_link_click(mut self, on_link_click: impl Fn(Link) -> Message + 'a) -> Self {
         self.on_link_click = Some(Box::new(on_link_click));
+        self
+    }
+
+    /// Sets the selection range for this [`Rich`] text.
+    ///
+    /// The range is specified as (start_char, end_char) indices into the text content.
+    pub fn selection(mut self, range: Option<(usize, usize)>) -> Self {
+        self.selection = range;
+        self
+    }
+
+    /// Sets the color of the selection highlight.
+    pub fn selection_color(mut self, color: impl Into<Color>) -> Self {
+        self.selection_color = Some(color.into());
         self
     }
 
@@ -254,6 +274,25 @@ where
             .downcast_ref::<State<Link, Renderer::Paragraph>>();
 
         let style = theme.style(&self.class);
+
+        // Draw selection highlight before text
+        if let Some((start, end)) = self.selection {
+            let selection_color = self
+                .selection_color
+                .unwrap_or(Color::from_rgba(0.0, 0.0, 1.0, 0.3));
+            let translation = layout.position() - Point::ORIGIN;
+            let selection_bounds = state.paragraph.selection_bounds(start, end);
+
+            for bounds in selection_bounds {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: bounds + translation,
+                        ..Default::default()
+                    },
+                    selection_color,
+                );
+            }
+        }
 
         for (index, span) in self.spans.as_ref().as_ref().iter().enumerate() {
             let is_hovered_link = self.on_link_click.is_some() && Some(index) == self.hovered_link;
@@ -415,13 +454,15 @@ where
     fn mouse_interaction(
         &self,
         _tree: &Tree,
-        _layout: Layout<'_>,
-        _cursor: mouse::Cursor,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
         if self.hovered_link.is_some() {
             mouse::Interaction::Pointer
+        } else if cursor.is_over(layout.bounds()) {
+            mouse::Interaction::Text
         } else {
             mouse::Interaction::None
         }

@@ -1163,14 +1163,24 @@ fn voice_mode_event(event: winit::event::VoiceModeWindowEvent) -> voice_mode::Ev
                 winit::event::VoiceModeOrbState::Floating => voice_mode::OrbState::Floating,
                 winit::event::VoiceModeOrbState::Attached => voice_mode::OrbState::Attached,
                 winit::event::VoiceModeOrbState::Frozen => voice_mode::OrbState::Frozen,
-                winit::event::VoiceModeOrbState::Transitioning => voice_mode::OrbState::Transitioning,
+                winit::event::VoiceModeOrbState::Transitioning => {
+                    voice_mode::OrbState::Transitioning
+                }
             },
         },
         VoiceModeWindowEvent::Stop => voice_mode::Event::Stopped,
         VoiceModeWindowEvent::Cancel => voice_mode::Event::Cancelled,
-        VoiceModeWindowEvent::OrbAttached { x, y, width, height } => {
-            voice_mode::Event::OrbAttached { x, y, width, height }
-        }
+        VoiceModeWindowEvent::OrbAttached {
+            x,
+            y,
+            width,
+            height,
+        } => voice_mode::Event::OrbAttached {
+            x,
+            y,
+            width,
+            height,
+        },
         VoiceModeWindowEvent::OrbDetached => voice_mode::Event::OrbDetached,
         VoiceModeWindowEvent::WillStop { serial } => voice_mode::Event::WillStop { serial },
     }
