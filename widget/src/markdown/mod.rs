@@ -43,6 +43,8 @@
 //!     }
 //! }
 //! ```
+mod selectable;
+
 use crate::core::alignment;
 use crate::core::border;
 use crate::core::font::{self, Font};
@@ -246,6 +248,13 @@ pub struct Row {
     cells: Vec<Vec<Item>>,
 }
 
+impl Row {
+    /// Returns the cells of this row.
+    pub fn cells(&self) -> &[Vec<Item>] {
+        &self.cells
+    }
+}
+
 /// A bunch of parsed Markdown text.
 #[derive(Debug, Clone)]
 pub struct Text {
@@ -331,7 +340,9 @@ impl Span {
                         ..style.font
                     })
                 } else {
-                    span.font(style.font)
+                    // Don't set font - inherit from parent rich_text widget
+                    // This allows code blocks to use code_block_font
+                    span
                 };
 
                 if let Some(link) = link.as_ref() {
@@ -1037,7 +1048,7 @@ impl Settings {
             h4_size: text_size * 1.25,
             h5_size: text_size,
             h6_size: text_size,
-            code_size: text_size * 0.75,
+            code_size: text_size,
             spacing: text_size * 0.875,
             style: style.into(),
         }
@@ -1073,6 +1084,8 @@ pub struct Style {
     pub code_block_font: Font,
     /// The [`Color`] to be applied to links.
     pub link_color: Color,
+    /// The [`Color`] to be applied to text selection.
+    pub selection_color: Color,
 }
 
 impl Style {
@@ -1089,6 +1102,12 @@ impl Style {
             inline_code_font: Font::MONOSPACE,
             code_block_font: Font::MONOSPACE,
             link_color: palette.primary,
+            selection_color: Color::from_rgba(
+                palette.primary.r,
+                palette.primary.g,
+                palette.primary.b,
+                0.3,
+            ),
         }
     }
 }
@@ -1154,14 +1173,15 @@ impl From<Theme> for Style {
 /// }
 /// ```
 pub fn view<'a, Theme, Renderer>(
-    items: impl IntoIterator<Item = &'a Item>,
+    items: &'a [Item],
     settings: impl Into<Settings>,
+    selectable: bool,
 ) -> Element<'a, Uri, Theme, Renderer>
 where
     Theme: Catalog + 'a,
     Renderer: core::text::Renderer<Font = Font> + 'a,
 {
-    view_with(items, settings, &DefaultViewer)
+    view_with(items, settings, selectable, &DefaultViewer)
 }
 
 /// Runs [`view`] but with a custom [`Viewer`] to turn an [`Item`] into
@@ -1170,7 +1190,28 @@ where
 /// This is useful if you want to customize the look of certain Markdown
 /// elements.
 pub fn view_with<'a, Message, Theme, Renderer>(
-    items: impl IntoIterator<Item = &'a Item>,
+    items: &'a [Item],
+    settings: impl Into<Settings>,
+    selectable: bool,
+    viewer: &impl Viewer<'a, Message, Theme, Renderer>,
+) -> Element<'a, Message, Theme, Renderer>
+where
+    Message: Clone + 'a,
+    Theme: Catalog + 'a,
+    Renderer: core::text::Renderer<Font = Font> + 'a,
+{
+    let content = view_with_inner(items, settings, viewer);
+
+    if selectable {
+        selectable::Selectable::new(content, items).into()
+    } else {
+        content
+    }
+}
+
+/// Internal view function without Clone bound, used for nested content.
+fn view_with_inner<'a, Message, Theme, Renderer>(
+    items: &'a [Item],
     settings: impl Into<Settings>,
     viewer: &impl Viewer<'a, Message, Theme, Renderer>,
 ) -> Element<'a, Message, Theme, Renderer>
@@ -1182,7 +1223,7 @@ where
     let settings = settings.into();
 
     let blocks = items
-        .into_iter()
+        .iter()
         .enumerate()
         .map(|(i, item_)| item(viewer, settings, item_, i));
 
@@ -1250,6 +1291,7 @@ where
 
     container(
         rich_text(text.spans(settings.style))
+            .font(settings.style.font)
             .on_link_click(on_link_click)
             .size(match level {
                 pulldown_cmark::HeadingLevel::H1 => h1_size,
@@ -1280,6 +1322,7 @@ where
     Renderer: core::text::Renderer<Font = Font> + 'a,
 {
     rich_text(text.spans(settings.style))
+        .font(settings.style.font)
         .size(settings.text_size)
         .on_link_click(on_link_click)
         .into()
@@ -1310,7 +1353,7 @@ where
                     )
                 }
             },
-            view_with(
+            view_with_inner(
                 bullet.items(),
                 Settings {
                     spacing: settings.spacing * 0.6,
@@ -1350,7 +1393,7 @@ where
                 .size(settings.text_size)
                 .align_x(alignment::Horizontal::Right)
                 .width(settings.text_size * ((digits / 2.0).ceil() + 1.0)),
-            view_with(
+            view_with_inner(
                 bullet.items(),
                 Settings {
                     spacing: settings.spacing * 0.6,
@@ -1526,10 +1569,14 @@ where
         let _url = url;
         let _title = title;
 
-        container(rich_text(alt.spans(settings.style)).on_link_click(Self::on_link_click))
-            .padding(settings.spacing.0)
-            .class(Theme::code_block())
-            .into()
+        container(
+            rich_text(alt.spans(settings.style))
+                .font(settings.style.font)
+                .on_link_click(Self::on_link_click),
+        )
+        .padding(settings.spacing.0)
+        .class(Theme::code_block())
+        .into()
     }
 
     /// Displays a heading.

@@ -374,6 +374,65 @@ impl core::text::Paragraph for Paragraph {
         bounds
     }
 
+    fn selection_bounds(&self, start: usize, end: usize) -> Vec<Rectangle> {
+        let internal = self.internal();
+
+        if start >= end {
+            return Vec::new();
+        }
+
+        let mut bounds = Vec::new();
+        let mut current_bounds: Option<Rectangle> = None;
+
+        for run in internal.buffer.layout_runs() {
+            let line_top = run.line_top;
+            let line_height = run.line_height;
+
+            for glyph in run.glyphs.iter() {
+                // Check if this glyph overlaps with the selection range
+                // glyph.start and glyph.end are byte offsets in the text
+                let glyph_start = glyph.start;
+                let glyph_end = glyph.end;
+
+                // Skip glyphs before the selection
+                if glyph_end <= start {
+                    continue;
+                }
+
+                // Stop if we've passed the selection
+                if glyph_start >= end {
+                    break;
+                }
+
+                let y = line_top + glyph.y;
+                let glyph_height = glyph.line_height_opt.unwrap_or(line_height);
+
+                let new_bounds = || {
+                    Rectangle::new(Point::new(glyph.x, y), Size::new(glyph.w, glyph_height))
+                        * (1.0 / self.0.hint_factor)
+                };
+
+                match current_bounds.as_mut() {
+                    None => {
+                        current_bounds = Some(new_bounds());
+                    }
+                    Some(cb) if (y / self.0.hint_factor - cb.y).abs() > 0.1 => {
+                        // New line - push current bounds and start new
+                        bounds.push(*cb);
+                        *cb = new_bounds();
+                    }
+                    Some(cb) => {
+                        // Same line - extend width
+                        cb.width += glyph.w / self.0.hint_factor;
+                    }
+                }
+            }
+        }
+
+        bounds.extend(current_bounds);
+        bounds
+    }
+
     fn grapheme_position(&self, line: usize, index: usize) -> Option<Point> {
         use unicode_segmentation::UnicodeSegmentation;
 

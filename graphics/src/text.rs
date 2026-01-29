@@ -206,8 +206,19 @@ pub fn measure(buffer: &cosmic_text::Buffer) -> (Size, bool) {
         buffer
             .layout_runs()
             .fold((0.0, 0.0, false), |(width, height, has_rtl), run| {
+                // Use actual glyph bounds instead of line_w to account for
+                // italic overhangs and other glyphs that extend beyond advance width
+                let glyph_max_x = run
+                    .glyphs
+                    .iter()
+                    .map(|g| g.x + g.w)
+                    .fold(0.0f32, f32::max);
+
+                // Use the greater of line_w and actual glyph extent
+                let actual_width = run.line_w.max(glyph_max_x);
+
                 (
-                    run.line_w.max(width),
+                    actual_width.max(width),
                     height + run.line_height,
                     has_rtl || run.rtl,
                 )
