@@ -383,6 +383,7 @@ where
             vertical_alignment: alignment::Vertical::Center,
             shaping: self.text_shaping,
             wrapping: self.text_wrap,
+            letter_spacing: None,
         };
 
         for (option, paragraph) in options.iter().zip(state.options.iter_mut())
@@ -657,6 +658,7 @@ where
                     vertical_alignment: alignment::Vertical::Center,
                     shaping,
                     wrapping: wrap,
+                    letter_spacing: None,
                 },
                 Point::new(
                     bounds.x + bounds.width - self.padding.right,
@@ -687,6 +689,7 @@ where
                     vertical_alignment: alignment::Vertical::Center,
                     shaping: self.text_shaping,
                     wrapping: self.text_wrap,
+                    letter_spacing: None,
                 },
                 Point::new(bounds.x + self.padding.left, bounds.center_y()),
                 if is_selected {

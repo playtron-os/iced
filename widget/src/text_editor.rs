@@ -887,6 +887,7 @@ where
                         vertical_alignment: alignment::Vertical::Top,
                         shaping: text::Shaping::Advanced,
                         wrapping: self.wrapping,
+                        letter_spacing: None,
                     },
                     text_bounds.position(),
                     style.placeholder,

@@ -44,6 +44,12 @@ pub struct Text<Content = String, Font = crate::Font> {
 
     /// The [`Wrapping`] strategy of the [`Text`].
     pub wrapping: Wrapping,
+
+    /// The letter spacing of the [`Text`] in pixels.
+    ///
+    /// Extra horizontal space added between each character glyph.
+    /// If `None`, no extra spacing is applied.
+    pub letter_spacing: Option<f32>,
 }
 
 /// The shaping strategy of some text.
@@ -274,6 +280,10 @@ pub struct Span<'a, Link = (), Font = crate::Font> {
     pub underline: bool,
     /// Whether the [`Span`] should be struck through or not.
     pub strikethrough: bool,
+    /// The letter spacing of the [`Span`] in pixels.
+    ///
+    /// Per-span override; falls back to paragraph default if `None`.
+    pub letter_spacing: Option<f32>,
 }
 
 /// A text highlight.
@@ -299,6 +309,7 @@ impl<'a, Link, Font> Span<'a, Link, Font> {
             padding: Padding::ZERO,
             underline: false,
             strikethrough: false,
+            letter_spacing: None,
         }
     }
 
@@ -429,6 +440,12 @@ impl<'a, Link, Font> Span<'a, Link, Font> {
         self
     }
 
+    /// Sets the letter spacing of the [`Span`] in pixels.
+    pub fn letter_spacing(mut self, letter_spacing: f32) -> Self {
+        self.letter_spacing = Some(letter_spacing);
+        self
+    }
+
     /// Turns the [`Span`] into a static one.
     pub fn to_static(self) -> Span<'static, Link, Font> {
         Span {
@@ -442,6 +459,7 @@ impl<'a, Link, Font> Span<'a, Link, Font> {
             padding: self.padding,
             underline: self.underline,
             strikethrough: self.strikethrough,
+            letter_spacing: self.letter_spacing,
         }
     }
 }

@@ -340,6 +340,7 @@ where
                     alignment::Vertical::Top,
                     self.text_shaping,
                     self.text_wrapping,
+                    None,
                 )
             },
         )
@@ -450,6 +451,7 @@ where
                         vertical_alignment: alignment::Vertical::Center,
                         shaping: *shaping,
                         wrapping: text::Wrapping::default(),
+                        letter_spacing: None,
                     },
                     bounds.center(),
                     style.icon_color,

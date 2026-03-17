@@ -74,6 +74,7 @@ where
     shaping: Shaping,
     wrapping: Wrapping,
     class: Theme::Class<'a>,
+    letter_spacing: Option<f32>,
 }
 
 impl<'a, Theme, Renderer> Text<'a, Theme, Renderer>
@@ -96,6 +97,7 @@ where
             shaping: Shaping::default(),
             wrapping: Wrapping::default(),
             class: Theme::default(),
+            letter_spacing: None,
         }
     }
 
@@ -164,6 +166,14 @@ where
     /// Sets the [`Wrapping`] strategy of the [`Text`].
     pub fn wrapping(mut self, wrapping: Wrapping) -> Self {
         self.wrapping = wrapping;
+        self
+    }
+
+    /// Sets the letter spacing of the [`Text`] in pixels.
+    ///
+    /// Extra horizontal space added between each character glyph.
+    pub fn letter_spacing(mut self, letter_spacing: f32) -> Self {
+        self.letter_spacing = Some(letter_spacing);
         self
     }
 
@@ -251,6 +261,7 @@ where
             self.vertical_alignment,
             self.shaping,
             self.wrapping,
+            self.letter_spacing,
         )
     }
 
@@ -330,6 +341,7 @@ pub fn layout<Renderer>(
     vertical_alignment: alignment::Vertical,
     shaping: Shaping,
     wrapping: Wrapping,
+    letter_spacing: Option<f32>,
 ) -> layout::Node
 where
     Renderer: text::Renderer,
@@ -352,6 +364,7 @@ where
             vertical_alignment,
             shaping,
             wrapping,
+            letter_spacing,
         });
 
         paragraph.min_bounds()

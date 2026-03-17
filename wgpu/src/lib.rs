@@ -410,6 +410,7 @@ impl Renderer {
                         vertical_alignment: alignment::Vertical::Top,
                         shaping: core::text::Shaping::Advanced,
                         wrapping: core::text::Wrapping::Word,
+                        letter_spacing: None,
                     };
 
                     renderer.fill_text(

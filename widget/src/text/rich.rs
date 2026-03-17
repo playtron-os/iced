@@ -483,6 +483,7 @@ where
             vertical_alignment,
             shaping: Shaping::Advanced,
             wrapping,
+            letter_spacing: None,
         };
 
         if state.spans != spans {
@@ -500,6 +501,7 @@ where
                 vertical_alignment,
                 shaping: Shaping::Advanced,
                 wrapping,
+                letter_spacing: None,
             }) {
                 core::text::Difference::None => {}
                 core::text::Difference::Bounds => {

@@ -316,6 +316,7 @@ where
                     alignment::Vertical::Top,
                     self.text_shaping,
                     self.text_wrapping,
+                    None,
                 )
             },
         )

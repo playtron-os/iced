@@ -23,6 +23,7 @@ struct Internal {
     bounds: Size,
     min_bounds: Size,
     version: text::Version,
+    letter_spacing: Option<f32>,
 }
 
 impl Paragraph {
@@ -85,7 +86,7 @@ impl core::text::Paragraph for Paragraph {
         buffer.set_text(
             font_system.raw(),
             text.content,
-            &text::to_attributes(text.font),
+            &text::to_attributes_with_spacing(text.font, text.letter_spacing, f32::from(text.size)),
             text::to_shaping(text.shaping),
             None,
         );
@@ -102,6 +103,7 @@ impl core::text::Paragraph for Paragraph {
             bounds: text.bounds,
             min_bounds,
             version: font_system.version(),
+            letter_spacing: text.letter_spacing,
         }))
     }
 
@@ -128,7 +130,14 @@ impl core::text::Paragraph for Paragraph {
         buffer.set_rich_text(
             font_system.raw(),
             text.content.iter().enumerate().map(|(i, span)| {
-                let attrs = text::to_attributes(span.font.unwrap_or(text.font));
+                let span_font = span.font.unwrap_or(text.font);
+                let span_size = span.size.unwrap_or(text.size);
+                let span_letter_spacing = span.letter_spacing.or(text.letter_spacing);
+                let attrs = text::to_attributes_with_spacing(
+                    span_font,
+                    span_letter_spacing,
+                    f32::from(span_size),
+                );
 
                 let attrs = match (span.size, span.line_height) {
                     (None, None) => attrs,
@@ -174,6 +183,7 @@ impl core::text::Paragraph for Paragraph {
             bounds: text.bounds,
             min_bounds,
             version: font_system.version(),
+            letter_spacing: text.letter_spacing,
         }))
     }
 
@@ -206,6 +216,7 @@ impl core::text::Paragraph for Paragraph {
             || paragraph.wrapping != text.wrapping
             || paragraph.horizontal_alignment != text.horizontal_alignment
             || paragraph.vertical_alignment != text.vertical_alignment
+            || paragraph.letter_spacing != text.letter_spacing
         {
             core::text::Difference::Shape
         } else if paragraph.bounds != text.bounds {
@@ -405,6 +416,7 @@ impl Default for Internal {
             bounds: Size::ZERO,
             min_bounds: Size::ZERO,
             version: text::Version::default(),
+            letter_spacing: None,
         }
     }
 }
