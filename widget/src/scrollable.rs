@@ -1847,6 +1847,7 @@ where
                 shaping: text::Shaping::Basic,
                 wrapping: text::Wrapping::None,
                 ellipsize: text::Ellipsize::None,
+                letter_spacing: None,
             };
 
             if self.vertical {

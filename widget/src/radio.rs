@@ -327,6 +327,7 @@ where
                         shaping: self.text_shaping,
                         wrapping: self.text_wrapping,
                         ellipsize: self.text_ellipsize,
+                        letter_spacing: None,
                     },
                 )
             },

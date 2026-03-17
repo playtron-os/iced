@@ -1079,6 +1079,7 @@ where
                         shaping: text::Shaping::Advanced,
                         wrapping: self.wrapping,
                         ellipsize: self.ellipsize,
+                        letter_spacing: None,
                     },
                     text_bounds.position(),
                     style.placeholder,

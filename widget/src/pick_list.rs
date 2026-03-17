@@ -395,6 +395,7 @@ where
             shaping: self.text_shaping,
             wrapping: self.text_wrap,
             ellipsize: self.text_ellipsize,
+            letter_spacing: None,
         };
 
         for (option, paragraph) in options.iter().zip(state.options.iter_mut())
@@ -689,6 +690,7 @@ where
                     shaping,
                     wrapping: wrap,
                     ellipsize: ellipsize,
+                    letter_spacing: None,
                 },
                 Point::new(
                     bounds.x + bounds.width - self.padding.right,
@@ -720,6 +722,7 @@ where
                     shaping: self.text_shaping,
                     wrapping: self.text_wrap,
                     ellipsize: self.text_ellipsize,
+                    letter_spacing: None,
                 },
                 Point::new(bounds.x + self.padding.left, bounds.center_y()),
                 if selected.is_some() {

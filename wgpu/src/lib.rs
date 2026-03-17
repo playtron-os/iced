@@ -699,6 +699,7 @@ impl Renderer {
                         shaping: core::text::Shaping::Advanced,
                         wrapping: core::text::Wrapping::Word,
                         ellipsize: core::text::Ellipsize::None,
+                        letter_spacing: None,
                     };
 
                     renderer.fill_text(

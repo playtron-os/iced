@@ -110,6 +110,11 @@ pub trait Paragraph: Sized + Default {
 
     /// Returns the [`Ellipsize`] strategy of the [`Paragraph`]>
     fn ellipsize(&self) -> Ellipsize;
+
+    /// Returns the letter spacing of the [`Paragraph`], in pixels.
+    fn letter_spacing(&self) -> Option<f32> {
+        None
+    }
 }
 
 /// A [`Paragraph`] of plain text.
@@ -207,6 +212,7 @@ impl<P: Paragraph> Plain<P> {
             shaping: self.raw.shaping(),
             wrapping: self.raw.wrapping(),
             ellipsize: self.raw.ellipsize(),
+            letter_spacing: self.raw.letter_spacing(),
         }
     }
 }

@@ -354,6 +354,7 @@ where
                             shaping: self.text_shaping,
                             wrapping: self.text_wrapping,
                             ellipsize: self.text_ellipsize,
+                            letter_spacing: None,
                         },
                     )
                 } else {
@@ -481,6 +482,7 @@ where
                         shaping: *shaping,
                         wrapping: text::Wrapping::default(),
                         ellipsize: text::Ellipsize::default(),
+                        letter_spacing: None,
                     },
                     bounds.center(),
                     style.icon_color,

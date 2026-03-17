@@ -509,6 +509,7 @@ where
             shaping: Shaping::Advanced,
             wrapping,
             ellipsize,
+            letter_spacing: None,
         };
 
         if state.spans != spans {
@@ -527,6 +528,7 @@ where
                 shaping: Shaping::Advanced,
                 wrapping,
                 ellipsize,
+                letter_spacing: None,
             }) {
                 core::text::Difference::None => {}
                 core::text::Difference::Bounds => {

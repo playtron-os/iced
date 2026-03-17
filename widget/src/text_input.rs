@@ -322,6 +322,7 @@ where
             shaping: text::Shaping::Advanced,
             wrapping: text::Wrapping::default(),
             ellipsize: text::Ellipsize::default(),
+            letter_spacing: None,
         };
 
         let _ = state.placeholder.update(placeholder_text);
@@ -348,6 +349,7 @@ where
                 shaping: text::Shaping::Advanced,
                 wrapping: text::Wrapping::default(),
                 ellipsize: text::Ellipsize::default(),
+                letter_spacing: None,
             };
 
             let _ = state.icon.update(icon_text);
@@ -1764,6 +1766,7 @@ fn replace_paragraph<Renderer>(
         shaping: text::Shaping::Advanced,
         wrapping: text::Wrapping::default(),
         ellipsize: text::Ellipsize::default(),
+        letter_spacing: None,
     });
 }
 
