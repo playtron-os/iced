@@ -76,15 +76,13 @@ impl core::text::Paragraph for Paragraph {
         );
 
         buffer.set_size(
-            font_system.raw(),
             Some(text.bounds.width),
             Some(text.bounds.height),
         );
 
-        buffer.set_wrap(font_system.raw(), text::to_wrap(text.wrapping));
+        buffer.set_wrap(text::to_wrap(text.wrapping));
 
         buffer.set_text(
-            font_system.raw(),
             text.content,
             &text::to_attributes_with_spacing(text.font, text.letter_spacing, f32::from(text.size)),
             text::to_shaping(text.shaping),
@@ -122,13 +120,11 @@ impl core::text::Paragraph for Paragraph {
         );
 
         buffer.set_size(
-            font_system.raw(),
             Some(text.bounds.width),
             Some(text.bounds.height),
         );
 
         buffer.set_rich_text(
-            font_system.raw(),
             text.content.iter().enumerate().map(|(i, span)| {
                 let span_font = span.font.unwrap_or(text.font);
                 let span_size = span.size.unwrap_or(text.size);
@@ -194,7 +190,6 @@ impl core::text::Paragraph for Paragraph {
             text::font_system().write().expect("Write font system");
 
         paragraph.buffer.set_size(
-            font_system.raw(),
             Some(new_bounds.width),
             Some(new_bounds.height),
         );

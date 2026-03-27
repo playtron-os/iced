@@ -47,12 +47,10 @@ impl Cache {
             let mut buffer = cosmic_text::Buffer::new(font_system, metrics);
 
             buffer.set_size(
-                font_system,
                 Some(key.bounds.width),
                 Some(key.bounds.height.max(key.line_height)),
             );
             buffer.set_text(
-                font_system,
                 key.content,
                 &text::to_attributes(key.font),
                 text::to_shaping(key.shaping),
