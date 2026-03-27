@@ -57,6 +57,8 @@ impl Cache {
                 None,
             );
 
+            buffer.shape_until_scroll(font_system, false);
+
             let bounds = text::measure(&buffer);
             let _ = entry.insert(Entry {
                 buffer,

@@ -89,6 +89,8 @@ impl core::text::Paragraph for Paragraph {
             None,
         );
 
+        buffer.shape_until_scroll(font_system.raw(), false);
+
         let min_bounds = text::measure(&buffer);
 
         Self(Arc::new(Internal {
@@ -167,6 +169,8 @@ impl core::text::Paragraph for Paragraph {
             }),
         );
 
+        buffer.shape_until_scroll(font_system.raw(), false);
+
         let min_bounds = text::measure(&buffer);
 
         Self(Arc::new(Internal {
@@ -193,6 +197,8 @@ impl core::text::Paragraph for Paragraph {
             Some(new_bounds.width),
             Some(new_bounds.height),
         );
+
+        paragraph.buffer.shape_until_scroll(font_system.raw(), false);
 
         paragraph.bounds = new_bounds;
         paragraph.min_bounds = text::measure(&paragraph.buffer);
