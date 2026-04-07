@@ -510,7 +510,7 @@ where
                     width: style.handle.border_width,
                     color: style.handle.border_color,
                 },
-                ..renderer::Quad::default()
+                shadow: style.handle.shadow,
             },
             style.handle.background,
         );
