@@ -40,7 +40,7 @@ use crate::core::widget::tree::{self, Tree};
 use crate::core::widget::Id;
 use crate::core::{
     self, Background, Clipboard, Color, Element, Layout, Length, Pixels, Point,
-    Rectangle, Shell, Size, Theme, Widget,
+    Rectangle, Shadow, Shell, Size, Theme, Widget,
 };
 
 use std::ops::RangeInclusive;
@@ -486,13 +486,41 @@ where
     ) {
         let state = tree.state.downcast_ref::<State>();
         let bounds = layout.bounds();
-        let is_mouse_over = cursor.is_over(bounds);
+
+        let value = self.value.into() as f32;
+        let (range_start, range_end) = {
+            let (start, end) = self.range.clone().into_inner();
+            (start.into() as f32, end.into() as f32)
+        };
+
+        let active_style = theme.style(&self.class, Status::Active);
+        let active_handle_width = match active_style.handle.shape {
+            HandleShape::Circle { radius } => radius * 2.0,
+            HandleShape::Rectangle { width, .. } => f32::from(width),
+        };
+
+        let handle_offset = if range_start >= range_end {
+            0.0
+        } else {
+            (bounds.width - active_handle_width) * (value - range_start)
+                / (range_end - range_start)
+        };
+
+        let handle_center_x = bounds.x + handle_offset + active_handle_width / 2.0;
+        let handle_center_y = bounds.y + bounds.height / 2.0;
+
+        let knob_hover_radius = active_handle_width / 2.0 + 4.0;
+        let is_over_knob = cursor.position().map_or(false, |pos| {
+            let dx = pos.x - handle_center_x;
+            let dy = pos.y - handle_center_y;
+            (dx * dx + dy * dy).sqrt() <= knob_hover_radius
+        });
 
         let style = theme.style(
             &self.class,
             if state.is_dragging {
                 Status::Dragged
-            } else if is_mouse_over {
+            } else if is_over_knob {
                 Status::Hovered
             } else {
                 Status::Active
@@ -632,7 +660,7 @@ where
                     width: style.handle.border_width,
                     color: style.handle.border_color,
                 },
-                ..renderer::Quad::default()
+                shadow: style.handle.shadow,
             },
             style.handle.background,
         );
@@ -839,6 +867,8 @@ pub struct Handle {
     pub border_width: f32,
     /// The border [`Color`] of the handle.
     pub border_color: Color,
+    /// The [`Shadow`] of the handle.
+    pub shadow: Shadow,
 }
 
 /// The shape of the handle of a slider.
@@ -912,6 +942,7 @@ pub fn default(theme: &Theme, status: Status) -> Style {
             background: color.into(),
             border_color: Color::TRANSPARENT,
             border_width: 0.0,
+            shadow: Shadow::default(),
         },
         breakpoint: Breakpoint {
             color: palette.background.weak.text,
