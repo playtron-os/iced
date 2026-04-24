@@ -147,9 +147,11 @@ impl Atlas {
 
                 for row in 0..height as usize {
                     let offset = row * padded_width;
-                    padded_data[offset..offset + 4 * width as usize].copy_from_slice(
-                        &data[row * 4 * width as usize..(row + 1) * 4 * width as usize],
-                    );
+                    padded_data[offset..offset + 4 * width as usize]
+                        .copy_from_slice(
+                            &data[row * 4 * width as usize
+                                ..(row + 1) * 4 * width as usize],
+                        );
                 }
 
                 self.upload_allocation(
@@ -172,18 +174,23 @@ impl Atlas {
                 );
 
                 let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-                let max_frag_width = fragments.iter()
+                let max_frag_width = fragments
+                    .iter()
                     .map(|f| f.allocation.size().width)
                     .max()
                     .unwrap_or(4096);
-                let max_frag_height = fragments.iter()
+                let max_frag_height = fragments
+                    .iter()
                     .map(|f| f.allocation.size().height)
                     .max()
                     .unwrap_or(4096);
 
-                let max_padding = (align - (4 * max_frag_width) % align) % align;
-                let max_padded_width = (4 * max_frag_width + max_padding) as usize;
-                let max_buffer_size = max_padded_width * max_frag_height as usize;
+                let max_padding =
+                    (align - (4 * max_frag_width) % align) % align;
+                let max_padded_width =
+                    (4 * max_frag_width + max_padding) as usize;
+                let max_buffer_size =
+                    max_padded_width * max_frag_height as usize;
 
                 let mut reusable_buffer = vec![0u8; max_buffer_size];
 
@@ -193,7 +200,9 @@ impl Atlas {
                     let frag_width = frag_size.width;
                     let frag_height = frag_size.height;
 
-                    if frag_x + frag_width > width || frag_y + frag_height > height {
+                    if frag_x + frag_width > width
+                        || frag_y + frag_height > height
+                    {
                         log::error!(
                             "Fragment out of bounds: {}x{} at ({}, {}) exceeds image {}x{}. Skipping fragment.",
                             frag_width, frag_height, frag_x, frag_y, width, height
@@ -205,13 +214,15 @@ impl Atlas {
                     let padded_width = (4 * frag_width + padding) as usize;
                     let padded_data_size = padded_width * frag_height as usize;
 
-                    let fragment_data = &mut reusable_buffer[..padded_data_size];
+                    let fragment_data =
+                        &mut reusable_buffer[..padded_data_size];
 
                     let src_row_size = 4 * frag_width as usize;
 
                     for row in 0..frag_height as usize {
                         let src_row = frag_y as usize + row;
-                        let src_offset = src_row * 4 * width as usize + frag_x as usize * 4;
+                        let src_offset =
+                            src_row * 4 * width as usize + frag_x as usize * 4;
                         let src_end = src_offset + src_row_size;
                         let dst_offset = row * padded_width;
                         let dst_end = dst_offset + src_row_size;
@@ -232,7 +243,8 @@ impl Atlas {
                             break;
                         }
 
-                        fragment_data[dst_offset..dst_end].copy_from_slice(&data[src_offset..src_end]);
+                        fragment_data[dst_offset..dst_end]
+                            .copy_from_slice(&data[src_offset..src_end]);
 
                         if padding > 0 {
                             let padding_start = dst_end;
@@ -449,13 +461,14 @@ impl Atlas {
             return;
         }
 
-        let buffer_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("image upload buffer"),
-                contents: data,
-                usage: wgpu::BufferUsages::COPY_SRC,
-            })
-        }));
+        let buffer_result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("image upload buffer"),
+                    contents: data,
+                    usage: wgpu::BufferUsages::COPY_SRC,
+                })
+            }));
 
         let buffer = match buffer_result {
             Ok(buf) => buf,
@@ -527,7 +540,8 @@ impl Atlas {
         let bytes_per_row = (4 * image_width + padding) as usize;
 
         // Calculate how many rows we can fit in one chunk (with 20% safety margin)
-        let max_rows_per_chunk = ((max_buffer_size * 4) / (5 * bytes_per_row)).max(1) as u32;
+        let max_rows_per_chunk =
+            ((max_buffer_size * 4) / (5 * bytes_per_row)).max(1) as u32;
 
         log::warn!(
             "Chunked upload: splitting {}x{} allocation into chunks of {} rows each",
@@ -545,13 +559,16 @@ impl Atlas {
             let chunk_data = &data[chunk_start..chunk_start + chunk_size];
 
             // Attempt buffer creation with panic protection
-            let buffer_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("image upload buffer (chunked)"),
-                    contents: chunk_data,
-                    usage: wgpu::BufferUsages::COPY_SRC,
-                })
-            }));
+            let buffer_result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("image upload buffer (chunked)"),
+                            contents: chunk_data,
+                            usage: wgpu::BufferUsages::COPY_SRC,
+                        },
+                    )
+                }));
 
             let buffer = match buffer_result {
                 Ok(buf) => buf,

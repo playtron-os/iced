@@ -47,6 +47,7 @@ use winit::raw_window_handle::HasWindowHandle;
 
 pub(crate) use window_manager::WindowManager;
 
+use log::trace;
 use rustc_hash::FxHashMap;
 use std::any::Any;
 use std::borrow::Cow;
@@ -55,7 +56,6 @@ use std::mem::ManuallyDrop;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use log::trace;
 
 /// An interactive, native, cross-platform, multi-windowed application.
 ///

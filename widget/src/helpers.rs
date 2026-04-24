@@ -1845,6 +1845,21 @@ where
     MouseArea::new(widget)
 }
 
+/// Creates a new [`Opacity`] widget with the given opacity value and content.
+///
+/// Opacity values range from `0.0` (fully transparent) to `1.0` (fully opaque).
+///
+/// [`Opacity`]: crate::Opacity
+pub fn opacity<'a, Message, Theme, Renderer>(
+    opacity: f32,
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+) -> crate::Opacity<'a, Message, Theme, Renderer>
+where
+    Renderer: core::Renderer,
+{
+    crate::Opacity::new(opacity, content)
+}
+
 /// A widget that applies any `Theme` to its contents.
 pub fn themer<'a, Message, OldTheme, NewTheme, Renderer>(
     new_theme: NewTheme,

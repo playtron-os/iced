@@ -75,16 +75,17 @@ impl core::text::Paragraph for Paragraph {
             ),
         );
 
-        buffer.set_size(
-            Some(text.bounds.width),
-            Some(text.bounds.height),
-        );
+        buffer.set_size(Some(text.bounds.width), Some(text.bounds.height));
 
         buffer.set_wrap(text::to_wrap(text.wrapping));
 
         buffer.set_text(
             text.content,
-            &text::to_attributes_with_spacing(text.font, text.letter_spacing, f32::from(text.size)),
+            &text::to_attributes_with_spacing(
+                text.font,
+                text.letter_spacing,
+                f32::from(text.size),
+            ),
             text::to_shaping(text.shaping),
             None,
         );
@@ -121,16 +122,14 @@ impl core::text::Paragraph for Paragraph {
             ),
         );
 
-        buffer.set_size(
-            Some(text.bounds.width),
-            Some(text.bounds.height),
-        );
+        buffer.set_size(Some(text.bounds.width), Some(text.bounds.height));
 
         buffer.set_rich_text(
             text.content.iter().enumerate().map(|(i, span)| {
                 let span_font = span.font.unwrap_or(text.font);
                 let span_size = span.size.unwrap_or(text.size);
-                let span_letter_spacing = span.letter_spacing.or(text.letter_spacing);
+                let span_letter_spacing =
+                    span.letter_spacing.or(text.letter_spacing);
                 let attrs = text::to_attributes_with_spacing(
                     span_font,
                     span_letter_spacing,
@@ -193,12 +192,13 @@ impl core::text::Paragraph for Paragraph {
         let mut font_system =
             text::font_system().write().expect("Write font system");
 
-        paragraph.buffer.set_size(
-            Some(new_bounds.width),
-            Some(new_bounds.height),
-        );
+        paragraph
+            .buffer
+            .set_size(Some(new_bounds.width), Some(new_bounds.height));
 
-        paragraph.buffer.shape_until_scroll(font_system.raw(), false);
+        paragraph
+            .buffer
+            .shape_until_scroll(font_system.raw(), false);
 
         paragraph.bounds = new_bounds;
         paragraph.min_bounds = text::measure(&paragraph.buffer);

@@ -82,6 +82,9 @@ pub struct Renderer {
     text_storage: text::Storage,
     text_viewport: text::Viewport,
 
+    /// Stack of opacity values (multiplied together for nested opacity)
+    opacity_stack: Vec<f32>,
+
     // TODO: Centralize all the image feature handling
     #[cfg(any(feature = "svg", feature = "image"))]
     image_cache: std::cell::RefCell<image::Cache>,
@@ -103,11 +106,19 @@ impl Renderer {
             text_storage: text::Storage::new(),
             text_viewport: engine.text_pipeline.create_viewport(device),
 
+            opacity_stack: vec![1.0],
+
             #[cfg(any(feature = "svg", feature = "image"))]
             image_cache: std::cell::RefCell::new(
                 engine.create_image_cache(device),
             ),
         }
+    }
+
+    /// Returns the current combined opacity value from the opacity stack.
+    #[inline]
+    fn current_opacity(&self) -> f32 {
+        *self.opacity_stack.last().unwrap_or(&1.0)
     }
 
     pub fn present<T: AsRef<str>>(
@@ -433,6 +444,34 @@ impl Renderer {
     }
 }
 
+/// Applies opacity to a background, quad border, and shadow, returning the modified values.
+#[inline]
+fn apply_opacity(
+    opacity: f32,
+    background: impl Into<Background>,
+    quad: core::renderer::Quad,
+) -> (Background, core::renderer::Quad) {
+    if opacity >= 1.0 {
+        return (background.into(), quad);
+    }
+
+    let background = background.into().scale_alpha(opacity);
+
+    let mut border = quad.border;
+    border.color.a *= opacity;
+
+    let mut shadow = quad.shadow;
+    shadow.color.a *= opacity;
+
+    let quad = core::renderer::Quad {
+        border,
+        shadow,
+        ..quad
+    };
+
+    (background, quad)
+}
+
 impl core::Renderer for Renderer {
     fn start_layer(&mut self, bounds: Rectangle) {
         self.layers.push_clip(bounds);
@@ -450,17 +489,33 @@ impl core::Renderer for Renderer {
         self.layers.pop_transformation();
     }
 
+    fn start_opacity(&mut self, _bounds: Rectangle, opacity: f32) {
+        let current = *self.opacity_stack.last().unwrap_or(&1.0);
+        let new_opacity = current * opacity.clamp(0.0, 1.0);
+        self.opacity_stack.push(new_opacity);
+    }
+
+    fn end_opacity(&mut self) {
+        if self.opacity_stack.len() > 1 {
+            let _ = self.opacity_stack.pop();
+        }
+    }
+
     fn fill_quad(
         &mut self,
         quad: core::renderer::Quad,
         background: impl Into<Background>,
     ) {
+        let (background, quad) =
+            apply_opacity(self.current_opacity(), background, quad);
         let (layer, transformation) = self.layers.current_mut();
-        layer.draw_quad(quad, background.into(), transformation);
+        layer.draw_quad(quad, background, transformation);
     }
 
     fn clear(&mut self) {
         self.layers.clear();
+        self.opacity_stack.clear();
+        self.opacity_stack.push(1.0);
     }
 }
 
@@ -489,6 +544,11 @@ impl core::text::Renderer for Renderer {
         color: Color,
         clip_bounds: Rectangle,
     ) {
+        let opacity = self.current_opacity();
+        let color = Color {
+            a: color.a * opacity,
+            ..color
+        };
         let (layer, transformation) = self.layers.current_mut();
 
         layer.draw_paragraph(
@@ -507,6 +567,11 @@ impl core::text::Renderer for Renderer {
         color: Color,
         clip_bounds: Rectangle,
     ) {
+        let opacity = self.current_opacity();
+        let color = Color {
+            a: color.a * opacity,
+            ..color
+        };
         let (layer, transformation) = self.layers.current_mut();
         layer.draw_editor(editor, position, color, clip_bounds, transformation);
     }
@@ -518,6 +583,11 @@ impl core::text::Renderer for Renderer {
         color: Color,
         clip_bounds: Rectangle,
     ) {
+        let opacity = self.current_opacity();
+        let color = Color {
+            a: color.a * opacity,
+            ..color
+        };
         let (layer, transformation) = self.layers.current_mut();
         layer.draw_text(text, position, color, clip_bounds, transformation);
     }
@@ -545,13 +615,14 @@ impl core::image::Renderer for Renderer {
         opacity: f32,
         border_radius: [f32; 4],
     ) {
+        let current_opacity = self.current_opacity();
         let (layer, transformation) = self.layers.current_mut();
         layer.draw_raster(
             crate::core::Image {
                 handle,
                 filter_method,
                 rotation,
-                opacity,
+                opacity: opacity * current_opacity,
                 snap: true,
                 border_radius,
             },
@@ -567,9 +638,14 @@ impl core::svg::Renderer for Renderer {
         self.image_cache.borrow_mut().measure_svg(handle)
     }
 
-    fn draw_svg(&mut self, handle: core::svg::Svg, bounds: Rectangle) {
+    fn draw_svg(&mut self, svg: core::svg::Svg, bounds: Rectangle) {
+        let opacity = self.current_opacity();
+        let svg = core::svg::Svg {
+            opacity: svg.opacity * opacity,
+            ..svg
+        };
         let (layer, transformation) = self.layers.current_mut();
-        layer.draw_svg(handle, bounds, transformation);
+        layer.draw_svg(svg, bounds, transformation);
     }
 }
 

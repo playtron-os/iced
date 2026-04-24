@@ -10,6 +10,7 @@ pub use iced_runtime::core;
 
 mod column;
 mod mouse_area;
+pub mod opacity;
 mod row;
 mod space;
 mod stack;
@@ -60,6 +61,8 @@ pub use container::Container;
 pub use list::List;
 #[doc(no_inline)]
 pub use mouse_area::MouseArea;
+#[doc(no_inline)]
+pub use opacity::Opacity;
 #[doc(no_inline)]
 pub use pane_grid::PaneGrid;
 #[doc(no_inline)]

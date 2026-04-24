@@ -483,9 +483,10 @@ impl editor::Editor for Editor {
         {
             log::trace!("Updating `Metrics` of `Editor`...");
 
-            buffer.set_metrics(
-                cosmic_text::Metrics::new(new_size.0, new_line_height.0),
-            );
+            buffer.set_metrics(cosmic_text::Metrics::new(
+                new_size.0,
+                new_line_height.0,
+            ));
         }
 
         let new_wrap = text::to_wrap(new_wrapping);
@@ -499,10 +500,7 @@ impl editor::Editor for Editor {
         if new_bounds != internal.bounds {
             log::trace!("Updating size of `Editor`...");
 
-            buffer.set_size(
-                Some(new_bounds.width),
-                Some(new_bounds.height),
-            );
+            buffer.set_size(Some(new_bounds.width), Some(new_bounds.height));
 
             internal.bounds = new_bounds;
         }

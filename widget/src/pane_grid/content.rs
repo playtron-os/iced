@@ -1,5 +1,4 @@
 use crate::container;
-use log::trace;
 use crate::core::event::{self, Event};
 use crate::core::layout;
 use crate::core::mouse;
@@ -10,6 +9,7 @@ use crate::core::{
     self, Clipboard, Element, Layout, Point, Rectangle, Shell, Size, Vector,
 };
 use crate::pane_grid::{Draggable, TitleBar};
+use log::trace;
 
 /// The content of a [`Pane`].
 ///
