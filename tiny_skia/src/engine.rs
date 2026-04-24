@@ -64,21 +64,14 @@ impl Engine {
             .min(quad.bounds.height / 2.0);
 
         let mut fill_border_radius = <[f32; 4]>::from(quad.border.radius);
-        // Offset the fill by the border width
-        let path_bounds = Rectangle {
-            x: quad.bounds.x + border_width,
-            y: quad.bounds.y + border_width,
-            width: quad.bounds.width - 2.0 * border_width,
-            height: quad.bounds.height - 2.0 * border_width,
-        };
-        // fill border radius is the border radius minus the border width
+
         for radius in &mut fill_border_radius {
-            *radius = (*radius - border_width / 2.0)
-                .min(path_bounds.width / 2.0)
-                .min(path_bounds.height / 2.0);
+            *radius = (*radius)
+                .min(quad.bounds.width / 2.0)
+                .min(quad.bounds.height / 2.0);
         }
 
-        let path = rounded_rectangle(path_bounds, fill_border_radius);
+        let path = rounded_rectangle(quad.bounds, fill_border_radius);
 
         let shadow = quad.shadow;
         // TODO: Disabled due to graphical glitches
@@ -271,22 +264,22 @@ impl Engine {
                 // Draw corners that have too small border radii as having no border radius,
                 // but mask them with the rounded rectangle with the correct border radius.
                 let mut temp_pixmap = tiny_skia::Pixmap::new(
-                    path_bounds.width as u32,
-                    path_bounds.height as u32,
+                    quad.bounds.width as u32,
+                    quad.bounds.height as u32,
                 )
                 .unwrap();
 
                 let mut quad_mask = tiny_skia::Mask::new(
-                    path_bounds.width as u32,
-                    path_bounds.height as u32,
+                    quad.bounds.width as u32,
+                    quad.bounds.height as u32,
                 )
                 .unwrap();
 
                 let zero_bounds = Rectangle {
                     x: 0.0,
                     y: 0.0,
-                    width: path_bounds.width,
-                    height: path_bounds.height,
+                    width: quad.bounds.width,
+                    height: quad.bounds.height,
                 };
                 let path = rounded_rectangle(zero_bounds, fill_border_radius);
 
@@ -299,8 +292,8 @@ impl Engine {
                 let path_bounds = Rectangle {
                     x: (border_width / 2.0),
                     y: (border_width / 2.0),
-                    width: path_bounds.width - border_width,
-                    height: path_bounds.height - border_width,
+                    width: quad.bounds.width - border_width,
+                    height: quad.bounds.height - border_width,
                 };
 
                 let border_radius_path =
