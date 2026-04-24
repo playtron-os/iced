@@ -9,6 +9,7 @@ use crate::core::{
     Vector, event,
 };
 use crate::pane_grid::{Draggable, TitleBar};
+use log::trace;
 
 /// The content of a [`Pane`].
 ///

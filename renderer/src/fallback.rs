@@ -80,6 +80,14 @@ where
     ) {
         delegate!(self, renderer, renderer.allocate_image(handle, callback));
     }
+
+    fn start_opacity(&mut self, bounds: Rectangle, opacity: f32) {
+        delegate!(self, renderer, renderer.start_opacity(bounds, opacity));
+    }
+
+    fn end_opacity(&mut self) {
+        delegate!(self, renderer, renderer.end_opacity());
+    }
 }
 
 impl<A, B> core::text::Renderer for Renderer<A, B>

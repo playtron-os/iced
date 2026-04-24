@@ -144,7 +144,8 @@ impl core::text::Paragraph for Paragraph {
             text.content.iter().enumerate().map(|(i, span)| {
                 let span_font = span.font.unwrap_or(text.font);
                 let span_size = span.size.unwrap_or(text.size);
-                let span_letter_spacing = span.letter_spacing.or(text.letter_spacing);
+                let span_letter_spacing =
+                    span.letter_spacing.or(text.letter_spacing);
                 let attrs = text::to_attributes_with_spacing(
                     span_font,
                     span_letter_spacing,
