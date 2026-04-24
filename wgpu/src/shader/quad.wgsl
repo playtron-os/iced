@@ -5,6 +5,8 @@ struct Globals {
 
 @group(0) @binding(0) var<uniform> globals: Globals;
 
+// Per-corner rounded box SDF. p is relative to box center, size is full box size,
+// corners is (top-left, top-right, bottom-right, bottom-left).
 fn rounded_box_sdf(p: vec2<f32>, size: vec2<f32>, corners: vec4<f32>) -> f32 {
     var box_half = select(corners.yz, corners.xw, p.x > 0.0);
     var corner = select(box_half.y, box_half.x, p.y > 0.0);
