@@ -166,30 +166,19 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     let pos = input.position_and_scale.xy;
     let scale = input.position_and_scale.zw;
 
-    // Signed distance from fragment to quad edge (negative = inside, positive = outside)
-    var dist = rounded_box_sdf(
-        -(input.position.xy - pos - scale * 0.5) * 2.0,
+    var dist: f32 = rounded_box_sdf(
+        -(input.position.xy - pos - scale / 2.0) * 2.0,
         scale,
         input.border_radius * 2.0
     ) / 2.0;
 
     if (input.border_width > 0.0) {
-        var border_mix: f32 = clamp(0.5 + dist + input.border_width, 0.0, 1.0);
-
-        // Alpha-composite border over fill (not raw mix) so that a low-alpha
-        // border colour doesn't drag RGB toward black at the corners.
-        var comp_a = input.border_color.a + mixed_color.a * (1.0 - input.border_color.a);
-        var comp_rgb = mixed_color.rgb;
-        if (comp_a > 0.001) {
-            comp_rgb = (input.border_color.rgb * input.border_color.a +
-                        mixed_color.rgb * mixed_color.a * (1.0 - input.border_color.a)) / comp_a;
-        }
-        let border_over_fill = vec4<f32>(comp_rgb, comp_a);
-
-        mixed_color = mix(mixed_color, border_over_fill, border_mix);
+        mixed_color = mix(
+            mixed_color,
+            input.border_color,
+            clamp(0.5 + dist + input.border_width, 0.0, 1.0)
+        );
     }
 
-    var quad_alpha: f32 = clamp(0.5 - dist, 0.0, 1.0);
-
-    return vec4<f32>(mixed_color.x, mixed_color.y, mixed_color.z, mixed_color.w * quad_alpha);
+    return mixed_color * clamp(0.5-dist, 0.0, 1.0);
 }

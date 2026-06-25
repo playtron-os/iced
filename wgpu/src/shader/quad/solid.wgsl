@@ -69,7 +69,6 @@ fn solid_fs_main(
 ) -> @location(0) vec4<f32> {
     var mixed_color: vec4<f32> = input.color;
 
-    // Signed distance from fragment to quad edge (negative = inside, positive = outside)
     var dist = rounded_box_sdf(
         -(input.position.xy - input.pos - input.scale * 0.5) * 2.0,
         input.scale,
@@ -77,41 +76,26 @@ fn solid_fs_main(
     ) / 2.0;
 
     if (input.border_width > 0.0) {
-        var border_mix: f32 = clamp(0.5 + dist + input.border_width, 0.0, 1.0);
-
-        // Alpha-composite border over fill (not raw mix) so that a low-alpha
-        // border colour doesn't drag RGB toward black at the corners.
-        var comp_a = input.border_color.a + input.color.a * (1.0 - input.border_color.a);
-        var comp_rgb = input.color.rgb;
-        if (comp_a > 0.001) {
-            comp_rgb = (input.border_color.rgb * input.border_color.a +
-                        input.color.rgb * input.color.a * (1.0 - input.border_color.a)) / comp_a;
-        }
-        let border_over_fill = vec4<f32>(comp_rgb, comp_a);
-
-        mixed_color = mix(input.color, border_over_fill, border_mix);
+        mixed_color = mix(
+            input.color,
+            input.border_color,
+            clamp(0.5 + dist + input.border_width, 0.0, 1.0)
+        );
     }
 
-    var quad_alpha: f32 = clamp(0.5 - dist, 0.0, 1.0);
+    var quad_alpha: f32 = clamp(0.5-dist, 0.0, 1.0);
 
-    let quad_color = vec4<f32>(mixed_color.x, mixed_color.y, mixed_color.z, mixed_color.w * quad_alpha);
+    let quad_color = mixed_color * quad_alpha;
 
     if input.shadow_color.a > 0.0 {
-        let shadow_distance = max(rounded_box_sdf(
-            -(input.position.xy - input.pos - input.shadow_offset - input.scale * 0.5) * 2.0,
+        var shadow_dist: f32 = rounded_box_sdf(
+            -(input.position.xy - input.pos - input.shadow_offset - input.scale/2.0) * 2.0,
             input.scale,
             input.border_radius * 2.0
-        ) / 2.0, 0.0);
+        ) / 2.0;
+        let shadow_alpha = 1.0 - smoothstep(-input.shadow_blur_radius, input.shadow_blur_radius, max(shadow_dist, 0.0));
 
-        let shadow_alpha = 1.0 - smoothstep(-input.shadow_blur_radius, input.shadow_blur_radius, shadow_distance);
-        let shadow_color = input.shadow_color;
-        let base_color = mix(
-            vec4<f32>(shadow_color.x, shadow_color.y, shadow_color.z, 0.0),
-            quad_color,
-            quad_color.a
-        );
-
-        return mix(base_color, shadow_color, (1.0 - quad_alpha) * shadow_alpha);
+        return mix(quad_color, input.shadow_color, (1.0 - quad_alpha) * shadow_alpha);
     } else {
         return quad_color;
     }
