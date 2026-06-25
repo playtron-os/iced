@@ -193,10 +193,3 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
 
     return vec4<f32>(mixed_color.x, mixed_color.y, mixed_color.z, mixed_color.w * quad_alpha);
 }
-
-fn unpack_u32(color: vec2<u32>) -> vec4<f32> {
-    let rg: vec2<f32> = unpack2x16float(color.x);
-    let ba: vec2<f32> = unpack2x16float(color.y);
-
-    return vec4<f32>(rg.y, rg.x, ba.y, ba.x);
-}
