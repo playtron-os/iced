@@ -31,9 +31,15 @@ use crate::core::widget::operation::{self, Operation};
 use crate::core::widget::tree::{self, Tree};
 use crate::core::window;
 use crate::core::{
-    Background, Color, Element, Event, Layout, Length, Padding, Rectangle, Shadow, Shell, Size,
-    Theme, Vector, Widget,
+    Background, Color, Element, Event, Layout, Length, Padding, Point, Rectangle, Shadow, Shell,
+    Size, Theme, Vector, Widget,
 };
+
+/// Distance (in logical pixels) a finger may travel after pressing a button
+/// before the touch is treated as a scroll/drag rather than a tap. Kept in sync
+/// with the drag threshold used by scrollable containers so a swipe that begins
+/// on a button scrolls instead of activating it.
+const TOUCH_DRAG_SLOP: f32 = 8.0;
 
 /// A generic widget that produces a message when pressed.
 ///
@@ -221,6 +227,8 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct State {
     is_pressed: bool,
+    /// Finger position where a touch press landed, for the tap-vs-drag slop.
+    press_origin: Point,
     is_focused: bool,
     /// The previous status before the last transition (for animation).
     previous_status: Option<Status>,
@@ -332,7 +340,6 @@ where
 
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-            | Event::Touch(touch::Event::FingerPressed { .. })
                 if self.on_press.is_some() =>
             {
                 let bounds = layout.bounds();
@@ -343,6 +350,32 @@ where
                     state.is_pressed = true;
 
                     shell.capture_event();
+                }
+            }
+            // A finger press only *arms* the button; unlike the mouse it does not
+            // capture the event, so an enclosing scrollable can still turn the
+            // same press into a drag-scroll. The tap fires on lift (below) and is
+            // cancelled by `FingerMoved` once the finger travels past the slop.
+            Event::Touch(touch::Event::FingerPressed { position, .. })
+                if self.on_press.is_some() =>
+            {
+                let bounds = layout.bounds();
+
+                if cursor.is_over(bounds) {
+                    let state = tree.state.downcast_mut::<State>();
+
+                    state.is_pressed = true;
+                    state.press_origin = *position;
+                }
+            }
+            Event::Touch(touch::Event::FingerMoved { position, .. }) => {
+                let state = tree.state.downcast_mut::<State>();
+
+                if state.is_pressed
+                    && state.press_origin.distance(*position) > TOUCH_DRAG_SLOP
+                {
+                    // The gesture became a scroll/drag — no longer a tap.
+                    state.is_pressed = false;
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
