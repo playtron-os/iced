@@ -3,9 +3,17 @@ use crate::core::layout;
 use crate::core::mouse;
 use crate::core::overlay;
 use crate::core::renderer;
+use crate::core::time::{Duration, Instant};
 use crate::core::touch;
 use crate::core::widget::{Operation, Tree, tree};
+use crate::core::window;
 use crate::core::{Element, Event, Layout, Length, Point, Rectangle, Shell, Size, Vector, Widget};
+
+/// A touch that stays pressed roughly still for this long fires `on_right_press`
+/// — the touchscreen equivalent of a right-click, which has no touch analog.
+const LONG_PRESS: Duration = Duration::from_millis(500);
+/// Movement (px) that cancels an in-progress long-press (treated as a drag/scroll).
+const LONG_PRESS_SLOP: f32 = 8.0;
 
 /// Emit messages on mouse events.
 pub struct MouseArea<'a, Message, Theme = crate::Theme, Renderer = crate::Renderer> {
@@ -135,6 +143,9 @@ struct State {
     cursor_position: Option<Point>,
     previous_click: Option<mouse::Click>,
     drag_initiated: Option<Point>,
+    /// In-progress long-press candidate: `(press position, start time)`. Armed
+    /// only for touch and only when `on_right_press` is set.
+    long_press: Option<(Point, Instant)>,
 }
 
 impl<'a, Message, Theme, Renderer> MouseArea<'a, Message, Theme, Renderer> {
@@ -387,12 +398,38 @@ fn update<Message: Clone, Theme, Renderer>(
             if state.drag_initiated.is_none() && widget.on_drag.is_some() {
                 state.drag_initiated = cursor_position;
             }
+
+            // Arm a long-press (touch only) as the touch analog of a
+            // right-click, so `on_right_press` context menus are reachable
+            // without a mouse. A still finger sends no further events, so ask
+            // for a redraw at the deadline to re-check the timer.
+            if matches!(event, Event::Touch(touch::Event::FingerPressed { .. }))
+                && widget.on_right_press.is_some()
+                && let Some(position) = cursor_position
+            {
+                state.long_press = Some((position, Instant::now()));
+                shell.request_redraw_at(Instant::now() + LONG_PRESS);
+            }
         }
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-        | Event::Touch(touch::Event::FingerLifted { .. }) => {
+        | Event::Touch(touch::Event::FingerLifted { .. } | touch::Event::FingerLost { .. }) => {
             state.drag_initiated = None;
+            state.long_press = None;
             if let Some(message) = widget.on_release.as_ref() {
                 shell.publish(message.clone());
+            }
+        }
+        Event::Window(window::Event::RedrawRequested(_)) => {
+            // Fire the context menu once the finger has been held still long
+            // enough (see the long-press arm above).
+            if let Some((_, at)) = state.long_press
+                && at.elapsed() >= LONG_PRESS
+            {
+                state.long_press = None;
+                if let Some(message) = widget.on_right_press.as_ref() {
+                    shell.publish(message.clone());
+                    shell.capture_event();
+                }
             }
         }
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
@@ -434,5 +471,14 @@ fn update<Message: Clone, Theme, Renderer>(
         state.drag_initiated = None;
         shell.publish(message.clone());
         shell.capture_event();
+    }
+
+    // Cancel an armed long-press once the finger travels far enough to be a
+    // drag/scroll rather than a stationary hold.
+    if let Some((origin, _)) = state.long_press
+        && let Some(position) = cursor.position()
+        && position.distance(origin) > LONG_PRESS_SLOP
+    {
+        state.long_press = None;
     }
 }
