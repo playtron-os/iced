@@ -24,6 +24,67 @@ impl Gradient {
             Gradient::Conic(conic) => Gradient::Conic(conic.scale_alpha(factor)),
         }
     }
+
+    /// Linearly interpolates between two [`Gradient`]s by the given amount.
+    ///
+    /// Returns `None` when the two gradients have no meaningful in-between:
+    /// different variants, or stop layouts that don't line up. A caller
+    /// animating a fill should step to the target in that case — collapsing an
+    /// un-blendable pair to a flat color makes the fill vanish mid-transition.
+    pub fn lerp(self, other: Self, amount: f32) -> Option<Self> {
+        match (self, other) {
+            (Gradient::Linear(from), Gradient::Linear(to)) => {
+                from.lerp(to, amount).map(Gradient::Linear)
+            }
+            (Gradient::Radial(from), Gradient::Radial(to)) => {
+                from.lerp(to, amount).map(Gradient::Radial)
+            }
+            (Gradient::Conic(from), Gradient::Conic(to)) => {
+                from.lerp(to, amount).map(Gradient::Conic)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Linearly interpolates between two scalars by the given amount.
+fn lerp(from: f32, to: f32, amount: f32) -> f32 {
+    from + (to - from) * amount
+}
+
+/// Linearly interpolates two [`Radians`] by the given amount.
+fn lerp_angle(from: Radians, to: Radians, amount: f32) -> Radians {
+    Radians(lerp(from.0, to.0, amount))
+}
+
+/// Linearly interpolates two [`Point`]s by the given amount.
+fn lerp_point(from: Point, to: Point, amount: f32) -> Point {
+    Point::new(lerp(from.x, to.x, amount), lerp(from.y, to.y, amount))
+}
+
+/// Linearly interpolates two stop lists, or `None` when they don't line up.
+///
+/// A stop appearing or disappearing has no midpoint — the gradient would have to
+/// gain or lose a band partway through — so those pairs are rejected outright.
+fn lerp_stops(
+    from: &[Option<ColorStop>; 8],
+    to: &[Option<ColorStop>; 8],
+    amount: f32,
+) -> Option<[Option<ColorStop>; 8]> {
+    let mut stops = [None; 8];
+
+    for (stop, (from, to)) in stops.iter_mut().zip(from.iter().zip(to.iter())) {
+        *stop = match (from, to) {
+            (Some(from), Some(to)) => Some(ColorStop {
+                offset: lerp(from.offset, to.offset, amount),
+                color: from.color.lerp(to.color, amount),
+            }),
+            (None, None) => None,
+            _ => return None,
+        };
+    }
+
+    Some(stops)
 }
 
 impl From<Linear> for Gradient {
@@ -118,6 +179,15 @@ impl Linear {
 
         self
     }
+
+    /// Linearly interpolates between two [`Linear`] gradients by the given
+    /// amount, or `None` when their stop layouts don't line up.
+    pub fn lerp(self, other: Self, amount: f32) -> Option<Self> {
+        Some(Self {
+            angle: lerp_angle(self.angle, other.angle, amount),
+            stops: lerp_stops(&self.stops, &other.stops, amount)?,
+        })
+    }
 }
 
 /// A radial gradient that interpolates colors in a circular pattern.
@@ -207,6 +277,17 @@ impl Radial {
 
         self
     }
+
+    /// Linearly interpolates between two [`Radial`] gradients by the given
+    /// amount, or `None` when their stop layouts don't line up.
+    pub fn lerp(self, other: Self, amount: f32) -> Option<Self> {
+        Some(Self {
+            center: lerp_point(self.center, other.center, amount),
+            radius_x: lerp(self.radius_x, other.radius_x, amount),
+            radius_y: lerp(self.radius_y, other.radius_y, amount),
+            stops: lerp_stops(&self.stops, &other.stops, amount)?,
+        })
+    }
 }
 
 /// A conic (angular/sweep) gradient that interpolates colors around a center point.
@@ -281,5 +362,80 @@ impl Conic {
         }
 
         self
+    }
+
+    /// Linearly interpolates between two [`Conic`] gradients by the given
+    /// amount, or `None` when their stop layouts don't line up.
+    pub fn lerp(self, other: Self, amount: f32) -> Option<Self> {
+        Some(Self {
+            center: lerp_point(self.center, other.center, amount),
+            angle: lerp_angle(self.angle, other.angle, amount),
+            stops: lerp_stops(&self.stops, &other.stops, amount)?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Conic, Gradient, Linear, Radial};
+    use crate::{Color, Point};
+
+    /// Every scalar of a linear gradient travels with the blend.
+    #[test]
+    fn linear_interpolates_angle_and_stops() {
+        let from = Linear::new(0.0).add_stop(0.0, Color::BLACK);
+        let to = Linear::new(2.0).add_stop(1.0, Color::WHITE);
+
+        let mid = from.lerp(to, 0.5).expect("matching stop layouts");
+
+        assert!((mid.angle.0 - 1.0).abs() < 1e-3);
+        assert!((mid.stops[0].unwrap().offset - 0.5).abs() < 1e-3);
+        assert!((mid.stops[0].unwrap().color.r - 0.5).abs() < 1e-3);
+    }
+
+    /// Radial carries its centre and both radii across.
+    #[test]
+    fn radial_interpolates_geometry() {
+        let from = Radial::new(Point::new(0.0, 0.0), 0.0).add_stop(0.0, Color::BLACK);
+        let to = Radial::elliptical(Point::new(1.0, 1.0), 1.0, 0.5).add_stop(0.0, Color::WHITE);
+
+        let mid = from.lerp(to, 0.5).expect("matching stop layouts");
+
+        assert!((mid.center.x - 0.5).abs() < 1e-3);
+        assert!((mid.radius_x - 0.5).abs() < 1e-3);
+        assert!((mid.radius_y - 0.25).abs() < 1e-3);
+    }
+
+    /// Conic carries its centre and start angle across.
+    #[test]
+    fn conic_interpolates_geometry() {
+        let from = Conic::new(Point::new(0.0, 0.0), 0.0).add_stop(0.0, Color::BLACK);
+        let to = Conic::new(Point::new(1.0, 1.0), 2.0).add_stop(0.0, Color::WHITE);
+
+        let mid = from.lerp(to, 0.5).expect("matching stop layouts");
+
+        assert!((mid.center.y - 0.5).abs() < 1e-3);
+        assert!((mid.angle.0 - 1.0).abs() < 1e-3);
+    }
+
+    /// A stop that only one side has would make the gradient gain or lose a
+    /// band partway through, so the pair is rejected.
+    #[test]
+    fn a_differing_stop_count_has_no_midpoint() {
+        let one = Linear::new(0.0).add_stop(0.0, Color::BLACK);
+        let two = Linear::new(0.0)
+            .add_stop(0.0, Color::BLACK)
+            .add_stop(1.0, Color::WHITE);
+
+        assert!(one.lerp(two, 0.5).is_none());
+    }
+
+    /// Variants don't blend into each other either.
+    #[test]
+    fn differing_variants_have_no_midpoint() {
+        let linear = Gradient::Linear(Linear::new(0.0).add_stop(0.0, Color::BLACK));
+        let radial = Gradient::Radial(Radial::new(Point::ORIGIN, 1.0).add_stop(0.0, Color::BLACK));
+
+        assert!(linear.lerp(radial, 0.5).is_none());
     }
 }

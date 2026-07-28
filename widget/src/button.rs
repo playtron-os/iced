@@ -485,10 +485,8 @@ where
                     let eased = easing.value(progress);
 
                     let prev_style = theme.style(&self.class, prev_status);
-                    let from = bg_color(prev_style.background);
-                    let to = bg_color(style.background);
 
-                    Some(Background::Color(from.lerp(to, eased)))
+                    Background::lerp_maybe(prev_style.background, style.background, eased)
                 }
                 _ => style.background,
             }
@@ -861,13 +859,5 @@ fn disabled(style: Style) -> Style {
             .map(|background| background.scale_alpha(0.5)),
         text_color: style.text_color.scale_alpha(0.5),
         ..style
-    }
-}
-
-/// Extracts the [`Color`] from an optional [`Background`], defaulting to transparent.
-fn bg_color(bg: Option<Background>) -> Color {
-    match bg {
-        Some(Background::Color(c)) => c,
-        _ => Color::TRANSPARENT,
     }
 }
