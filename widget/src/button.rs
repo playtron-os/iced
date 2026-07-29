@@ -371,9 +371,7 @@ where
             Event::Touch(touch::Event::FingerMoved { position, .. }) => {
                 let state = tree.state.downcast_mut::<State>();
 
-                if state.is_pressed
-                    && state.press_origin.distance(*position) > TOUCH_DRAG_SLOP
-                {
+                if state.is_pressed && state.press_origin.distance(*position) > TOUCH_DRAG_SLOP {
                     // The gesture became a scroll/drag — no longer a tap.
                     state.is_pressed = false;
                 }

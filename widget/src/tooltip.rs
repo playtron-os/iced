@@ -226,17 +226,6 @@ where
                     *state = State::Open { cursor_position };
                     shell.invalidate_layout();
                 }
-                (
-                    State::Open {
-                        cursor_position: last_position,
-                    },
-                    Some(cursor_position),
-                ) if self.position == Position::FollowCursor
-                    && last_position != cursor_position =>
-                {
-                    *state = State::Open { cursor_position };
-                    shell.request_redraw();
-                }
                 (State::Open { .. }, None) => {
                     *state = State::Idle;
                     shell.invalidate_layout();
@@ -390,7 +379,8 @@ pub enum Position {
     Left,
     /// The tooltip will appear on the right of the widget.
     Right,
-    /// The tooltip will follow the cursor.
+    /// The tooltip will appear below and to the right of the cursor, offset by
+    /// the `gap`, and stay at the position where the hover started.
     FollowCursor,
 }
 
@@ -472,8 +462,8 @@ where
                     let translation = self.position - self.content_bounds.position();
 
                     Vector::new(
-                        self.cursor_position.x,
-                        self.cursor_position.y - text_bounds.height,
+                        self.cursor_position.x + self.gap,
+                        self.cursor_position.y + self.gap,
                     ) + translation
                 }
             };
