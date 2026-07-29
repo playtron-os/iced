@@ -27,6 +27,16 @@ impl Vector {
             y: self.y.round(),
         }
     }
+
+    /// Linearly interpolates between `self` and `other` by the given amount.
+    ///
+    /// At `amount = 0.0` returns `self`, at `amount = 1.0` returns `other`.
+    pub const fn lerp(self, other: Self, amount: f32) -> Self {
+        Self {
+            x: self.x + (other.x - self.x) * amount,
+            y: self.y + (other.y - self.y) * amount,
+        }
+    }
 }
 
 impl<T> std::ops::Neg for Vector<T>

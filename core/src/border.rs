@@ -112,6 +112,30 @@ impl Border {
     pub fn widths(&self) -> [f32; 4] {
         self.sides.unwrap_or([self.width; 4])
     }
+
+    /// Linearly interpolates between two [`Border`]s by the given amount.
+    ///
+    /// A uniform border and a per-side one blend through their resolved
+    /// [`widths`](Self::widths), so the result is per-side for as long as either
+    /// end is — stepping straight to `other`'s sides instead would pop the border
+    /// on and off mid-transition. Two uniform borders stay uniform.
+    pub fn lerp(self, other: Self, amount: f32) -> Self {
+        let lerp = |from: f32, to: f32| from + (to - from) * amount;
+
+        let sides = if self.sides.is_none() && other.sides.is_none() {
+            None
+        } else {
+            let (from, to) = (self.widths(), other.widths());
+            Some(std::array::from_fn(|i| lerp(from[i], to[i])))
+        };
+
+        Self {
+            color: self.color.lerp(other.color, amount),
+            width: lerp(self.width, other.width),
+            radius: self.radius.lerp(other.radius, amount),
+            sides,
+        }
+    }
 }
 
 /// The border radii for the corners of a graphics primitive in the order:
@@ -259,6 +283,22 @@ impl Radius {
             top_right: value,
             bottom_right: value,
             ..self
+        }
+    }
+
+    /// Linearly interpolates between `self` and `other` by the given amount,
+    /// corner by corner.
+    ///
+    /// At `amount = 0.0` returns `self`, at `amount = 1.0` returns `other`.
+    pub const fn lerp(self, other: Self, amount: f32) -> Self {
+        Self {
+            top_left: self.top_left + (other.top_left - self.top_left) * amount,
+            top_right: self.top_right
+                + (other.top_right - self.top_right) * amount,
+            bottom_right: self.bottom_right
+                + (other.bottom_right - self.bottom_right) * amount,
+            bottom_left: self.bottom_left
+                + (other.bottom_left - self.bottom_left) * amount,
         }
     }
 }
