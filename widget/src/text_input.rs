@@ -113,6 +113,7 @@ where
     on_input: Option<Box<dyn Fn(String) -> Message + 'a>>,
     on_paste: Option<Box<dyn Fn(String) -> Message + 'a>>,
     on_submit: Option<Message>,
+    on_press: Option<Message>,
     on_focus: Option<Message>,
     on_unfocus: Option<Message>,
     on_escape: Option<Message>,
@@ -149,6 +150,7 @@ where
             on_input: None,
             on_paste: None,
             on_submit: None,
+            on_press: None,
             on_focus: None,
             on_unfocus: None,
             on_escape: None,
@@ -200,6 +202,28 @@ where
     /// focused and the enter key is pressed, if `Some`.
     pub fn on_submit_maybe(mut self, on_submit: Option<Message>) -> Self {
         self.on_submit = on_submit;
+        self
+    }
+
+    /// Sets the message produced when a focused [`TextInput`] is activated
+    /// without a pointer — a gamepad Confirm press routed through the
+    /// [`press_focused`] operation.
+    ///
+    /// A device with no keyboard needs this: focusing the field is not enough,
+    /// something has to open an on-screen keyboard for it.
+    ///
+    /// [`press_focused`]: operation::focusable::press_focused
+    #[must_use]
+    pub fn on_press(mut self, message: Message) -> Self {
+        self.on_press = Some(message);
+        self
+    }
+
+    /// Maybe sets the message produced when a focused [`TextInput`] is
+    /// activated. See [`Self::on_press`].
+    #[must_use]
+    pub fn on_press_maybe(mut self, on_press: Option<Message>) -> Self {
+        self.on_press = on_press;
         self
     }
 
@@ -1573,6 +1597,16 @@ where
             shell.publish(on_focus);
         }
 
+        // Consume a pending gamepad activation. Cleared unconditionally: a
+        // field with no `on_press` would otherwise latch the flag forever and
+        // fire it the moment a caller attached one.
+        if state.press_pending {
+            state.press_pending = false;
+            if let Some(on_press) = self.on_press.clone() {
+                shell.publish(on_press);
+            }
+        }
+
         let is_disabled = self.on_input.is_none();
 
         let status = if is_disabled {
@@ -1721,6 +1755,9 @@ pub struct State<P: text::Paragraph> {
     pending_edit_kind: Option<EditKind>,
     /// Timestamp of last edit for time-based debouncing
     last_edit_at: Option<Instant>,
+    /// Set by [`operation::Focusable::press`] when a gamepad Confirm reaches
+    /// this field; consumed in the next `update()` to publish `on_press`.
+    press_pending: bool,
     /// The previous status before the last border color transition (for animation).
     previous_status: Option<Status>,
     /// When the last border status transition started.
@@ -1874,6 +1911,18 @@ impl<P: text::Paragraph> operation::Focusable for State<P> {
 
     fn unfocus(&mut self) {
         State::unfocus(self);
+        // A field that loses focus with a press still latched would fire it on
+        // whatever refocuses it next.
+        self.press_pending = false;
+    }
+
+    fn press(&mut self) -> bool {
+        if State::is_focused(self) {
+            self.press_pending = true;
+            true
+        } else {
+            false
+        }
     }
 }
 

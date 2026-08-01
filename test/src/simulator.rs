@@ -158,6 +158,16 @@ where
             .unwrap_or(event::Status::Ignored)
     }
 
+    /// Runs a widget [`Operation`] against the interface.
+    ///
+    /// This is how focus and activation are driven without a pointer — the
+    /// path a gamepad takes, which no simulated event can reach.
+    ///
+    /// [`Operation`]: widget::Operation
+    pub fn operate(&mut self, operation: &mut dyn widget::Operation<()>) {
+        self.raw.operate(&self.renderer, operation);
+    }
+
     /// Simulates a user typing in the keyboard the given text in the [`Simulator`].
     pub fn typewrite(&mut self, text: &str) -> event::Status {
         let statuses = self.simulate(typewrite(text));
