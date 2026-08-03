@@ -152,6 +152,24 @@ impl Cache {
 
                 let mut rgba = img.take();
 
+                // Even here in the GPU backend an SVG is rasterized on the
+                // CPU first: `resvg` draws into a pixmap (its own re-export of
+                // `tiny-skia`, not the `iced_tiny_skia` renderer) and that is
+                // what gets uploaded as a texture below. Those pixels are
+                // pre-multiplied, while the atlas holds straight alpha -- what
+                // the raster path uploads, and what the colour filter just
+                // below assumes. Without this a translucent SVG arrives
+                // darkened: white at 81% becomes grey 206. Opaque artwork is
+                // unaffected, the two representations agreeing at a = 255.
+                rgba.chunks_exact_mut(4).for_each(|rgba| {
+                    let alpha = u16::from(rgba[3]);
+                    if alpha > 0 && alpha < 255 {
+                        for channel in &mut rgba[..3] {
+                            *channel = ((u16::from(*channel) * 255) / alpha).min(255) as u8;
+                        }
+                    }
+                });
+
                 if let Some(color) = color {
                     rgba.chunks_exact_mut(4).for_each(|rgba| {
                         if rgba[3] > 0 {
