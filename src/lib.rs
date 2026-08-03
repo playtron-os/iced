@@ -644,6 +644,11 @@ pub mod auto_hide {
     pub use crate::core::auto_hide::Event;
 }
 
+pub mod adaptive_foreground {
+    //! Listen and react to backdrop luminance events from the compositor.
+    pub use crate::core::adaptive_foreground::Event;
+}
+
 pub mod dismiss {
     //! Listen and react to dismiss events from the compositor.
     pub use crate::core::dismiss::Event;

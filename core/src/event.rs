@@ -1,4 +1,5 @@
 //! Handle events of a user interface.
+use crate::adaptive_foreground;
 use crate::auto_hide;
 use crate::clipboard;
 use crate::dismiss;
@@ -40,6 +41,9 @@ pub enum Event {
 
     /// An auto-hide visibility event from the compositor
     AutoHide(auto_hide::Event),
+
+    /// A backdrop luminance event from the compositor
+    AdaptiveForeground(adaptive_foreground::Event),
 
     /// A dismiss event from the compositor
     Dismiss(dismiss::Event),
