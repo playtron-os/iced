@@ -968,7 +968,7 @@ where
                     let modifiers = state.keyboard_modifiers;
 
                     match key.to_latin(*physical_key) {
-                        Some('c') if state.keyboard_modifiers.command() && !self.is_secure => {
+                        Some('c') if is_editing_shortcut(modifiers) && !self.is_secure => {
                             if let Some((start, end)) = state.cursor.selection(&self.value) {
                                 shell.write_clipboard(clipboard::Content::Text(
                                     self.value.select(start, end).to_string(),
@@ -978,7 +978,7 @@ where
                             shell.capture_event();
                             return;
                         }
-                        Some('x') if state.keyboard_modifiers.command() && !self.is_secure => {
+                        Some('x') if is_editing_shortcut(modifiers) && !self.is_secure => {
                             let Some(on_input) = &self.on_input else {
                                 return;
                             };
@@ -1012,10 +1012,11 @@ where
                             update_cache(state, &self.value);
                             return;
                         }
-                        Some('v')
-                            if state.keyboard_modifiers.command()
-                                && !state.keyboard_modifiers.alt() =>
-                        {
+                        // `Shift` is deliberately not excluded here, unlike
+                        // the arms around it: `Ctrl+Shift+V` means "paste as
+                        // plain text" wherever it is bound, and in an input
+                        // that holds nothing but plain text it is a paste.
+                        Some('v') if modifiers.command() && !modifiers.alt() => {
                             let Some(on_input) = &self.on_input else {
                                 return;
                             };
@@ -1057,7 +1058,7 @@ where
                             update_cache(state, &self.value);
                             return;
                         }
-                        Some('a') if state.keyboard_modifiers.command() => {
+                        Some('a') if is_editing_shortcut(modifiers) => {
                             let cursor_before = state.cursor;
 
                             state.cursor.select_all(&self.value);
@@ -1071,10 +1072,7 @@ where
                             shell.capture_event();
                             return;
                         }
-                        Some('z')
-                            if state.keyboard_modifiers.command()
-                                && !state.keyboard_modifiers.shift() =>
-                        {
+                        Some('z') if is_editing_shortcut(modifiers) => {
                             // Undo
                             let Some(on_input) = &self.on_input else {
                                 return;
@@ -1143,7 +1141,7 @@ where
                             }
                             return;
                         }
-                        Some('y') if state.keyboard_modifiers.command() => {
+                        Some('y') if is_editing_shortcut(modifiers) => {
                             // Redo (Ctrl+Y)
                             let Some(on_input) = &self.on_input else {
                                 return;
@@ -1763,6 +1761,18 @@ pub struct State<P: text::Paragraph> {
     /// When the last border status transition started.
     border_transition_start: Option<Instant>,
     // TODO: Add stateful horizontal scrolling offset
+}
+
+/// Whether these modifiers name an editing shortcut a focused input owns.
+///
+/// The command key, and neither `Shift` nor `Alt`. A chord that merely
+/// contains the command key is somebody else's: `Ctrl+Shift+C` is the copy
+/// chord of every terminal emulator, because `Ctrl+C` there is an interrupt,
+/// and an input that answered to it would take that away from the window it
+/// is sitting in. `Alt` is excluded because `AltGr` arrives as `Ctrl+Alt` on
+/// Windows, where it types a character rather than naming a command.
+fn is_editing_shortcut(modifiers: keyboard::Modifiers) -> bool {
+    modifiers.command() && !modifiers.shift() && !modifiers.alt()
 }
 
 fn state<Renderer: text::Renderer>(tree: &mut Tree) -> &mut State<Renderer::Paragraph> {

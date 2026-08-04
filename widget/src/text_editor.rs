@@ -1186,13 +1186,15 @@ impl<Message> Binding<Message> {
         }
 
         let combination = match key.to_latin(physical_key) {
-            Some('c') if modifiers.command() => Some(Self::Copy),
-            Some('x') if modifiers.command() => Some(Self::Cut),
+            Some('c') if is_editing_shortcut(modifiers) => Some(Self::Copy),
+            Some('x') if is_editing_shortcut(modifiers) => Some(Self::Cut),
+            // `Shift` deliberately allowed: `Ctrl+Shift+V` means "paste as
+            // plain text", which in an editor of plain text is a paste.
             Some('v') if modifiers.command() && !modifiers.alt() => Some(Self::Paste),
-            Some('a') if modifiers.command() => Some(Self::SelectAll),
-            Some('z') if modifiers.command() && !modifiers.shift() => Some(Self::Undo),
+            Some('a') if is_editing_shortcut(modifiers) => Some(Self::SelectAll),
+            Some('z') if is_editing_shortcut(modifiers) => Some(Self::Undo),
             Some('z') if modifiers.command() && modifiers.shift() => Some(Self::Redo),
-            Some('y') if modifiers.command() => Some(Self::Redo),
+            Some('y') if is_editing_shortcut(modifiers) => Some(Self::Redo),
             _ => None,
         };
 
@@ -1375,6 +1377,15 @@ impl<Message> Update<Message> {
             _ => None,
         }
     }
+}
+
+/// Whether these modifiers name an editing shortcut a focused editor owns.
+///
+/// The command key, and neither `Shift` nor `Alt`. See the note on the same
+/// predicate in `text_input`: a chord that merely contains the command key
+/// belongs to the window, not to the widget with the caret.
+fn is_editing_shortcut(modifiers: keyboard::Modifiers) -> bool {
+    modifiers.command() && !modifiers.shift() && !modifiers.alt()
 }
 
 fn motion(key: key::Named) -> Option<Motion> {

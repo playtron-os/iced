@@ -825,7 +825,12 @@ where
                 key: keyboard::Key::Character(c),
                 modifiers,
                 ..
-            }) if self.selectable && modifiers.command() && c.as_str() == "c" => {
+            }) if self.selectable
+                && modifiers.command()
+                && !modifiers.shift()
+                && !modifiers.alt()
+                && c.as_str() == "c" =>
+            {
                 // Copy selection to clipboard
                 if let Some((start, end)) = self.selection {
                     let text = extract_text_from_spans(
