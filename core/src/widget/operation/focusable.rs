@@ -568,6 +568,9 @@ where
 /// 4. Among out-of-beam candidates, a weighted edge distance is used
 ///    (primary × 1 + cross × 3) to favour roughly-aligned widgets.
 ///
+/// Horizontal moves are the exception to (4): they never leave their row.
+/// See [`shares_band`].
+///
 /// Returns `Some(index)` of the best candidate, or a direction-appropriate
 /// edge widget if nothing is focused, or `None` if there are no candidates.
 fn find_directional_target(
@@ -619,6 +622,15 @@ fn find_directional_target(
         };
 
         if !in_direction {
+            continue;
+        }
+
+        // A horizontal move stays on its row: a candidate off the row is not
+        // a candidate at all. Vertical moves keep the out-of-beam fallback —
+        // stepping between sections of different widths is the point of it.
+        if matches!(direction, FocusDirection::Left | FocusDirection::Right)
+            && !shares_band(focused_bounds, bounds)
+        {
             continue;
         }
 
@@ -734,6 +746,26 @@ fn find_directional_target(
     )
 }
 
+/// Whether two rectangles sit on the same row: one's vertical centre line
+/// falls inside the other's extent.
+///
+/// This gates horizontal focus movement. Left/Right are how a user walks a
+/// row — a toolbar, a chip strip, a shelf of cards — and at either end of one
+/// there is simply nothing further along. Ranked purely by distance, though,
+/// the weighted out-of-beam fallback always has *something* to offer, so the
+/// press reaches across the page and focus appears to escape. Requiring a
+/// shared row lets a move cross between neighbouring widgets of unequal
+/// height, and stop dead at the end of the row.
+///
+/// Centre-line containment rather than bare overlap: two stacked rows grazing
+/// each other by a pixel are not the same row.
+fn shares_band(a: Rectangle, b: Rectangle) -> bool {
+    let a_center = a.y + a.height / 2.0;
+    let b_center = b.y + b.height / 2.0;
+
+    (a_center > b.y && a_center < b.y + b.height) || (b_center > a.y && b_center < a.y + a.height)
+}
+
 /// Edge-to-edge distance between two 1D intervals. Returns 0 if they overlap.
 fn edge_dist(a_min: f32, a_max: f32, b_min: f32, b_max: f32) -> f32 {
     if a_max <= b_min {
@@ -832,5 +864,116 @@ fn wrap_widget(scan: &SpatialScan, focused_idx: usize, direction: FocusDirection
         focused_idx
     } else {
         candidate
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FocusDirection, SpatialScan, find_directional_target};
+    use crate::Rectangle;
+
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rectangle {
+        Rectangle {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// A scan of `widgets` in tree order with `focused` holding focus.
+    fn scan(widgets: &[Rectangle], focused: usize) -> SpatialScan {
+        SpatialScan {
+            widgets: widgets
+                .iter()
+                .enumerate()
+                .map(|(i, &bounds)| (i, bounds, None, u32::MAX))
+                .collect(),
+            focused: Some((focused, widgets[focused])),
+            total: widgets.len(),
+            ..SpatialScan::default()
+        }
+    }
+
+    fn go(widgets: &[Rectangle], focused: usize, direction: FocusDirection) -> Option<usize> {
+        find_directional_target(&scan(widgets, focused), direction, false)
+    }
+
+    /// The top-left menu row: a 64px avatar beside 56px icon buttons, centres
+    /// aligned. Unequal heights must not stop a move between them.
+    #[test]
+    fn a_horizontal_move_crosses_widgets_of_unequal_height() {
+        let menu = [
+            rect(64.0, 36.0, 64.0, 64.0),  // avatar
+            rect(160.0, 40.0, 56.0, 56.0), // search
+            rect(248.0, 40.0, 56.0, 56.0), // settings
+        ];
+
+        assert_eq!(go(&menu, 0, FocusDirection::Right), Some(1));
+        assert_eq!(go(&menu, 1, FocusDirection::Right), Some(2));
+        assert_eq!(go(&menu, 2, FocusDirection::Left), Some(1));
+    }
+
+    /// The regression, at Home's real geometry: the category chips are a
+    /// centred row, with the menu above them and the shelf below. Walking off
+    /// either end of the strip used to land in one of those, because the
+    /// weighted fallback always has something to offer.
+    #[test]
+    fn a_horizontal_move_stops_at_the_end_of_its_row() {
+        let home = [
+            rect(64.0, 36.0, 64.0, 64.0),     // avatar
+            rect(336.0, 40.0, 56.0, 56.0),    // power, last of the menu
+            rect(364.0, 247.0, 120.0, 65.0),  // chip, first
+            rect(508.0, 247.0, 120.0, 65.0),  // chip
+            rect(796.0, 247.0, 120.0, 65.0),  // chip, last
+            rect(736.0, 400.0, 300.0, 220.0), // a card on the shelf below
+        ];
+
+        // Off the left end: the menu sits up and to the left.
+        assert_eq!(go(&home, 2, FocusDirection::Left), None);
+        // Off the right end: the shelf sits down and to the right.
+        assert_eq!(go(&home, 4, FocusDirection::Right), None);
+        // Between them, the strip still walks.
+        assert_eq!(go(&home, 2, FocusDirection::Right), Some(3));
+        assert_eq!(go(&home, 4, FocusDirection::Left), Some(3));
+    }
+
+    /// Right at the end of a grid row does not fall into the next one.
+    #[test]
+    fn a_grid_row_does_not_spill_into_the_row_below() {
+        let grid = [
+            rect(64.0, 400.0, 300.0, 220.0),  // row 1
+            rect(400.0, 400.0, 300.0, 220.0), // row 1, last
+            rect(64.0, 660.0, 300.0, 220.0),  // row 2
+            rect(400.0, 660.0, 300.0, 220.0), // row 2
+            rect(736.0, 660.0, 300.0, 220.0), // row 2, further right than row 1 ends
+        ];
+
+        assert_eq!(go(&grid, 1, FocusDirection::Right), None);
+        assert_eq!(go(&grid, 0, FocusDirection::Right), Some(1));
+    }
+
+    /// Rows that graze each other are still two rows.
+    #[test]
+    fn a_pixel_of_overlap_is_not_a_shared_row() {
+        let rows = [
+            rect(0.0, 0.0, 100.0, 100.0),
+            rect(200.0, 99.0, 100.0, 100.0),
+        ];
+
+        assert_eq!(go(&rows, 0, FocusDirection::Right), None);
+    }
+
+    /// Vertical moves keep the out-of-beam fallback: a section below need not
+    /// line up with what is above it.
+    #[test]
+    fn a_vertical_move_still_crosses_to_an_unaligned_widget() {
+        let page = [
+            rect(64.0, 36.0, 64.0, 64.0),     // avatar, top left
+            rect(900.0, 400.0, 300.0, 220.0), // a card, far right and below
+        ];
+
+        assert_eq!(go(&page, 0, FocusDirection::Down), Some(1));
+        assert_eq!(go(&page, 1, FocusDirection::Up), Some(0));
     }
 }
