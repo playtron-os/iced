@@ -13,6 +13,18 @@ pub struct Clipboard {
     pub write: Option<Content>,
     /// Pending DnD requests from widgets.
     pub dnd_requests: Vec<dnd::Request>,
+
+    /// Whether a widget has asked to read the primary selection.
+    ///
+    /// A flag rather than a `Vec<Kind>` like `reads`: the primary selection is
+    /// text and only text, so there is no format to choose between. Kept
+    /// separate from `reads` because [`Event::Read`] carries no `Kind`, so a
+    /// primary read arriving on that channel would be indistinguishable from
+    /// an ordinary paste — and any focused text input would swallow it.
+    pub primary_reads: bool,
+
+    /// Text to publish as the primary selection, if any.
+    pub primary_write: Option<String>,
 }
 
 impl Clipboard {
@@ -22,6 +34,8 @@ impl Clipboard {
             reads: Vec::new(),
             write: None,
             dnd_requests: Vec::new(),
+            primary_reads: false,
+            primary_write: None,
         }
     }
 
@@ -30,6 +44,11 @@ impl Clipboard {
         self.reads.append(&mut other.reads);
         self.write = other.write.take().or(self.write.take());
         self.dnd_requests.append(&mut other.dnd_requests);
+        self.primary_reads |= other.primary_reads;
+        // Last writer in the frame wins, matching how `write` merges. Copy on
+        // select fires on every mouse release, so same-frame collisions are
+        // ordinary rather than exceptional.
+        self.primary_write = other.primary_write.take().or(self.primary_write.take());
     }
 }
 
@@ -47,6 +66,15 @@ pub enum Event {
 
     /// The clipboard was written.
     Written(Result<(), Error>),
+
+    /// The primary selection was read.
+    ///
+    /// Its own variant so a widget can tell a middle-click paste from an
+    /// ordinary one; [`Event::Read`] carries no discriminator.
+    PrimaryRead(Result<Arc<String>, Error>),
+
+    /// The primary selection was written.
+    PrimaryWritten(Result<(), Error>),
 }
 
 /// Some clipboard content.
@@ -127,4 +155,57 @@ pub enum Error {
         /// means to identify an error case during runtime.
         description: Arc<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merging_keeps_a_primary_read_from_either_side() {
+        // Reads are a flag, not a queue: two widgets asking in one frame want
+        // the same answer, and reading twice would prompt the compositor twice.
+        let mut a = Clipboard::new();
+        let mut b = Clipboard::new();
+        b.primary_reads = true;
+
+        a.merge(&mut b);
+        assert!(a.primary_reads);
+    }
+
+    #[test]
+    fn the_last_primary_write_in_a_frame_wins() {
+        // Copy-on-select fires on every mouse release, so two writes in one
+        // frame is ordinary. Matching how `write` merges keeps the two
+        // channels behaving the same.
+        let mut a = Clipboard::new();
+        a.primary_write = Some("first".to_owned());
+        let mut b = Clipboard::new();
+        b.primary_write = Some("second".to_owned());
+
+        a.merge(&mut b);
+        assert_eq!(a.primary_write.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn merging_an_empty_request_leaves_a_pending_primary_write_alone() {
+        let mut a = Clipboard::new();
+        a.primary_write = Some("keep me".to_owned());
+
+        a.merge(&mut Clipboard::new());
+        assert_eq!(a.primary_write.as_deref(), Some("keep me"));
+    }
+
+    #[test]
+    fn the_primary_channel_is_independent_of_the_clipboard() {
+        // The whole point of the separate channel: copy-on-select must not
+        // disturb what the user last copied deliberately.
+        let mut a = Clipboard::new();
+        let mut b = Clipboard::new();
+        b.primary_write = Some("selected".to_owned());
+
+        a.merge(&mut b);
+        assert!(a.write.is_none());
+        assert!(a.reads.is_empty());
+    }
 }

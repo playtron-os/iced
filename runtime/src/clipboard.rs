@@ -27,6 +27,45 @@ pub enum Action {
         /// The channel to send the write result.
         channel: oneshot::Sender<Result<(), Error>>,
     },
+
+    /// Read the primary selection and produce `T` with the result.
+    ReadPrimary {
+        /// The channel to send the read text.
+        channel: oneshot::Sender<Result<String, Error>>,
+    },
+
+    /// Publish the given text as the primary selection.
+    WritePrimary {
+        /// The text to publish.
+        text: String,
+
+        /// The channel to send the write result.
+        channel: oneshot::Sender<Result<(), Error>>,
+    },
+}
+
+/// Read the primary selection.
+///
+/// The primary selection is the X11 and Wayland convention where selecting
+/// text makes it available for a middle-click paste, without disturbing the
+/// clipboard the user last copied to deliberately. It is text-only, so unlike
+/// [`read`] there is no [`Kind`] to choose.
+///
+/// On platforms without a primary selection this yields
+/// [`Error::ContentNotAvailable`].
+pub fn read_primary() -> Task<Result<Arc<String>, Error>> {
+    task::oneshot(|channel| crate::Action::Clipboard(Action::ReadPrimary { channel }))
+        .map(|result| result.map(Arc::new))
+}
+
+/// Publish the given text as the primary selection.
+///
+/// Does not touch the clipboard: the two are separate selections, and
+/// copy-on-select must not overwrite what the user last copied.
+pub fn write_primary(text: impl Into<String>) -> Task<Result<(), Error>> {
+    let text = text.into();
+
+    task::oneshot(|channel| crate::Action::Clipboard(Action::WritePrimary { text, channel }))
 }
 
 /// Read the given [`Kind`] of [`Content`] from the clipboard.

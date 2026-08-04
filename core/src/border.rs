@@ -293,12 +293,9 @@ impl Radius {
     pub const fn lerp(self, other: Self, amount: f32) -> Self {
         Self {
             top_left: self.top_left + (other.top_left - self.top_left) * amount,
-            top_right: self.top_right
-                + (other.top_right - self.top_right) * amount,
-            bottom_right: self.bottom_right
-                + (other.bottom_right - self.bottom_right) * amount,
-            bottom_left: self.bottom_left
-                + (other.bottom_left - self.bottom_left) * amount,
+            top_right: self.top_right + (other.top_right - self.top_right) * amount,
+            bottom_right: self.bottom_right + (other.bottom_right - self.bottom_right) * amount,
+            bottom_left: self.bottom_left + (other.bottom_left - self.bottom_left) * amount,
         }
     }
 }

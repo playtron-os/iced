@@ -2392,6 +2392,16 @@ fn run_action<'a, P, C>(
                     let _ = channel.send(result);
                 });
             }
+            clipboard::Action::ReadPrimary { channel } => {
+                clipboard.read_primary(move |result| {
+                    let _ = channel.send(result);
+                });
+            }
+            clipboard::Action::WritePrimary { text, channel } => {
+                clipboard.write_primary(text, move |result| {
+                    let _ = channel.send(result);
+                });
+            }
         },
         Action::Window(action) => match action {
             window::Action::Open(id, settings, channel) => {
@@ -3635,6 +3645,30 @@ fn run_clipboard<Message: Send>(
             proxy.send_action(Action::Event {
                 window,
                 event: core::Event::Clipboard(core::clipboard::Event::Written(result)),
+            });
+        });
+    }
+
+    if requests.primary_reads {
+        let proxy = proxy.clone();
+
+        clipboard.read_primary(move |result| {
+            proxy.send_action(Action::Event {
+                window,
+                event: core::Event::Clipboard(core::clipboard::Event::PrimaryRead(
+                    result.map(Arc::new),
+                )),
+            });
+        });
+    }
+
+    if let Some(text) = requests.primary_write {
+        let proxy = proxy.clone();
+
+        clipboard.write_primary(text, move |result| {
+            proxy.send_action(Action::Event {
+                window,
+                event: core::Event::Clipboard(core::clipboard::Event::PrimaryWritten(result)),
             });
         });
     }

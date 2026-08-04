@@ -135,6 +135,97 @@ mod platform {
         }
     }
 
+    impl Clipboard {
+        /// Reads the primary selection as text.
+        ///
+        /// Only X11 and Wayland have a primary selection; elsewhere this
+        /// reports the content as unavailable rather than silently returning
+        /// the clipboard, which would make a middle-click paste produce
+        /// whatever was last copied.
+        pub fn read_primary(&self, callback: impl FnOnce(Result<String, Error>) + Send + 'static) {
+            let State::Connected { clipboard } = &self.state else {
+                callback(Err(Error::ClipboardUnavailable));
+                return;
+            };
+
+            let clipboard = clipboard.clone();
+
+            let _ = thread::spawn(move || {
+                let Ok(mut clipboard) = clipboard.lock() else {
+                    callback(Err(Error::ClipboardUnavailable));
+                    return;
+                };
+
+                #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))]
+                let result = {
+                    use arboard::GetExtLinux as _;
+
+                    clipboard
+                        .get()
+                        .clipboard(arboard::LinuxClipboardKind::Primary)
+                        .text()
+                        .map_err(to_error)
+                };
+
+                #[cfg(not(any(
+                    target_os = "linux",
+                    target_os = "freebsd",
+                    target_os = "openbsd"
+                )))]
+                let result = {
+                    let _ = &mut clipboard;
+                    Err(Error::ContentNotAvailable)
+                };
+
+                callback(result);
+            });
+        }
+
+        /// Publishes the given text as the primary selection.
+        pub fn write_primary(
+            &mut self,
+            text: String,
+            callback: impl FnOnce(Result<(), Error>) + Send + 'static,
+        ) {
+            let State::Connected { clipboard } = &self.state else {
+                callback(Err(Error::ClipboardUnavailable));
+                return;
+            };
+
+            let clipboard = clipboard.clone();
+
+            let _ = thread::spawn(move || {
+                let Ok(mut clipboard) = clipboard.lock() else {
+                    callback(Err(Error::ClipboardUnavailable));
+                    return;
+                };
+
+                #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))]
+                let result = {
+                    use arboard::SetExtLinux as _;
+
+                    clipboard
+                        .set()
+                        .clipboard(arboard::LinuxClipboardKind::Primary)
+                        .text(text)
+                        .map_err(to_error)
+                };
+
+                #[cfg(not(any(
+                    target_os = "linux",
+                    target_os = "freebsd",
+                    target_os = "openbsd"
+                )))]
+                let result = {
+                    let _ = (&mut clipboard, text);
+                    Err(Error::ClipboardNotSupported)
+                };
+
+                callback(result);
+            });
+        }
+    }
+
     fn to_error(error: arboard::Error) -> Error {
         match error {
             arboard::Error::ContentNotAvailable => Error::ContentNotAvailable,
@@ -172,6 +263,14 @@ mod platform {
         }
 
         /// Writes the given text contents to the [`Clipboard`].
+        pub fn read_primary(&self, callback: impl FnOnce(Result<String, Error>)) {
+            callback(Err(Error::ClipboardUnavailable));
+        }
+
+        pub fn write_primary(&mut self, _text: String, callback: impl FnOnce(Result<(), Error>)) {
+            callback(Err(Error::ClipboardUnavailable));
+        }
+
         pub fn write(&mut self, _content: Content, callback: impl FnOnce(Result<(), Error>)) {
             callback(Err(Error::ClipboardUnavailable));
         }

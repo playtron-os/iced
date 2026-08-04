@@ -81,10 +81,8 @@ impl Shadow {
         Self {
             color: self.color.lerp(other.color, amount),
             offset: self.offset.lerp(other.offset, amount),
-            blur_radius: self.blur_radius
-                + (other.blur_radius - self.blur_radius) * amount,
-            spread_radius: self.spread_radius
-                + (other.spread_radius - self.spread_radius) * amount,
+            blur_radius: self.blur_radius + (other.blur_radius - self.blur_radius) * amount,
+            spread_radius: self.spread_radius + (other.spread_radius - self.spread_radius) * amount,
             inset: other.inset,
         }
     }
@@ -104,9 +102,7 @@ impl Shadow {
         (0..from.len().max(to.len()))
             .filter_map(|i| match (from.get(i), to.get(i)) {
                 (Some(from), Some(to)) => Some(from.lerp(*to, amount)),
-                (Some(from), None) => {
-                    Some(from.lerp(from.transparent(), amount))
-                }
+                (Some(from), None) => Some(from.lerp(from.transparent(), amount)),
                 (None, Some(to)) => Some(to.transparent().lerp(*to, amount)),
                 // Unreachable: `i` is below the longer stack's length.
                 (None, None) => None,

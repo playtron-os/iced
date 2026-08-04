@@ -37,6 +37,8 @@ impl<'a, Message> Shell<'a, Message> {
                 reads: Vec::new(),
                 write: None,
                 dnd_requests: Vec::new(),
+                primary_reads: false,
+                primary_write: None,
             },
         }
     }
