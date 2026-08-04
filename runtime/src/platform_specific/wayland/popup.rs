@@ -95,6 +95,23 @@ pub struct PopupSettings {
     pub positioner: Positioner,
     /// Whether to grab keyboard and pointer input
     pub grab: bool,
+    /// Ask the compositor to blur what is behind the popup.
+    ///
+    /// Needs a compositor implementing a blur protocol, and content that is
+    /// translucent — an opaque card has nothing to show the blur through. The
+    /// blurred area is the whole surface, so pair this with `shadow` rather
+    /// than padding the surface out for a client-drawn one.
+    pub blur: bool,
+    /// Ask the compositor to draw a drop shadow behind the popup.
+    ///
+    /// The alternative to `Positioner::shadow_padding` and drawing one, and
+    /// the only one that combines with `blur`.
+    pub shadow: bool,
+    /// Corner radius hinted to the compositor, in logical pixels.
+    ///
+    /// Rounds the blur and the shadow to match the content drawn on the
+    /// surface; without it both are square while the content is rounded.
+    pub corner_radius: Option<u32>,
     /// When true, the popup surface will have an empty input region so
     /// pointer events pass through to the surface below. Useful for tooltips.
     pub input_passthrough: bool,
