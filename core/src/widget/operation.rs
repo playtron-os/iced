@@ -4,7 +4,7 @@ pub mod focusable;
 pub mod scrollable;
 pub mod text_input;
 
-pub use focusable::Focusable;
+pub use focusable::{FocusGroup, Focusable};
 pub use scrollable::Scrollable;
 pub use text_input::TextInput;
 
@@ -58,6 +58,18 @@ pub trait Operation<T = ()>: Send {
     /// to their child.  The default order is [`u32::MAX`] (lowest priority).
     fn focus_order_hint(&mut self, _order: u32) {}
 
+    /// Enters a focus traversal group, applying `group` to every focusable
+    /// widget visited until the matching [`Operation::exit_focus_group`].
+    ///
+    /// Wrapper widgets call this in [`operate()`] before delegating to their
+    /// child, and exit after. Groups nest, and the innermost one wins — a
+    /// shelf of cards can keep its own rules inside a panel that has looser
+    /// ones.
+    fn enter_focus_group(&mut self, _group: FocusGroup) {}
+
+    /// Leaves the focus traversal group most recently entered.
+    fn exit_focus_group(&mut self) {}
+
     /// Advertises action hints for the focusable widget that follows.
     ///
     /// Wrapper widgets call this in [`operate()`] just before delegating
@@ -103,6 +115,14 @@ where
 
     fn focus_order_hint(&mut self, order: u32) {
         self.as_mut().focus_order_hint(order);
+    }
+
+    fn enter_focus_group(&mut self, group: FocusGroup) {
+        self.as_mut().enter_focus_group(group);
+    }
+
+    fn exit_focus_group(&mut self) {
+        self.as_mut().exit_focus_group();
     }
 
     fn action_hintable(&mut self, id: Option<&Id>, bounds: Rectangle, hints: &dyn Any) {
@@ -196,6 +216,14 @@ where
 
         fn focus_order_hint(&mut self, order: u32) {
             self.operation.focus_order_hint(order);
+        }
+
+        fn enter_focus_group(&mut self, group: FocusGroup) {
+            self.operation.enter_focus_group(group);
+        }
+
+        fn exit_focus_group(&mut self) {
+            self.operation.exit_focus_group();
         }
 
         fn action_hintable(&mut self, id: Option<&Id>, bounds: Rectangle, hints: &dyn Any) {
@@ -301,6 +329,14 @@ where
                     self.operation.focus_order_hint(order);
                 }
 
+                fn enter_focus_group(&mut self, group: FocusGroup) {
+                    self.operation.enter_focus_group(group);
+                }
+
+                fn exit_focus_group(&mut self) {
+                    self.operation.exit_focus_group();
+                }
+
                 fn action_hintable(&mut self, id: Option<&Id>, bounds: Rectangle, hints: &dyn Any) {
                     self.operation.action_hintable(id, bounds, hints);
                 }
@@ -342,6 +378,14 @@ where
 
         fn focus_order_hint(&mut self, order: u32) {
             self.operation.focus_order_hint(order);
+        }
+
+        fn enter_focus_group(&mut self, group: FocusGroup) {
+            self.operation.enter_focus_group(group);
+        }
+
+        fn exit_focus_group(&mut self) {
+            self.operation.exit_focus_group();
         }
 
         fn action_hintable(&mut self, id: Option<&Id>, bounds: Rectangle, hints: &dyn Any) {
@@ -435,6 +479,14 @@ where
 
         fn focus_order_hint(&mut self, order: u32) {
             self.operation.focus_order_hint(order);
+        }
+
+        fn enter_focus_group(&mut self, group: FocusGroup) {
+            self.operation.enter_focus_group(group);
+        }
+
+        fn exit_focus_group(&mut self) {
+            self.operation.exit_focus_group();
         }
 
         fn action_hintable(&mut self, id: Option<&Id>, bounds: Rectangle, hints: &dyn Any) {

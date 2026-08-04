@@ -351,11 +351,43 @@ where
     PressFocused
 }
 
+/// How focus moves through a region of the widget tree.
+///
+/// The right rule is regional, not global. A chip strip or a shelf of cards is
+/// a row the user walks along and should not fall out of at its ends; a details
+/// panel deliberately places its controls at differing heights and expects
+/// Left/Right to reach them anyway. A group lets each region say which it is.
+///
+/// Groups are entered and left by wrapper widgets through
+/// [`Operation::enter_focus_group`], and nest — the innermost group containing
+/// a widget is the one that governs a move starting from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FocusGroup {
+    /// Whether a horizontal move may leave the row it started on.
+    ///
+    /// Defaults to `false`: Left/Right stay on their row. See [`shares_band`]
+    /// for why that is the safer default.
+    pub horizontal_leaves_row: bool,
+}
+
+/// A focusable widget seen during a scan, in tree order.
+#[derive(Debug, Clone)]
+struct Spot {
+    /// Position in the tree walk.
+    index: usize,
+    bounds: Rectangle,
+    id: Option<Id>,
+    /// Traversal order hint; lower wins ties. [`u32::MAX`] when unset.
+    order: u32,
+    /// The innermost group containing this widget.
+    group: FocusGroup,
+}
+
 /// A snapshot of all focusable widgets: their indices, bounds, and which is focused.
 #[derive(Debug, Clone, Default)]
 struct SpatialScan {
-    /// `(index, bounds, id, focus_order)` for every focusable widget in tree order.
-    widgets: Vec<(usize, Rectangle, Option<Id>, u32)>,
+    /// Every focusable widget in tree order.
+    widgets: Vec<Spot>,
     /// Index + bounds of the currently focused widget, if any.
     focused: Option<(usize, Rectangle)>,
     /// Running counter while scanning.
@@ -368,6 +400,8 @@ struct SpatialScan {
     direction_consumed: bool,
     /// Pending focus order hint for the next `focusable()` call.
     pending_order: Option<u32>,
+    /// Groups currently open in the walk; the last one is the innermost.
+    open_groups: Vec<FocusGroup>,
 }
 
 /// Produces an [`Operation`] that collects all focusable widget bounds.
@@ -381,10 +415,24 @@ fn spatial_scan(direction: FocusDirection, wrap: bool) -> impl Operation<Spatial
             self.result.pending_order = Some(order);
         }
 
+        fn enter_focus_group(&mut self, group: FocusGroup) {
+            self.result.open_groups.push(group);
+        }
+
+        fn exit_focus_group(&mut self) {
+            let _ = self.result.open_groups.pop();
+        }
+
         fn focusable(&mut self, id: Option<&Id>, bounds: Rectangle, state: &mut dyn Focusable) {
             let idx = self.result.total;
             let order = self.result.pending_order.take().unwrap_or(u32::MAX);
-            self.result.widgets.push((idx, bounds, id.cloned(), order));
+            self.result.widgets.push(Spot {
+                index: idx,
+                bounds,
+                id: id.cloned(),
+                order,
+                group: self.result.open_groups.last().copied().unwrap_or_default(),
+            });
             if state.is_focused() {
                 self.result.focused = Some((idx, bounds));
                 // Let the focused widget consume the direction (e.g. scroll).
@@ -497,15 +545,15 @@ where
         );
 
         if log::log_enabled!(log::Level::Trace) {
-            for &(idx, b, ref id, _) in &scan.widgets {
+            for spot in &scan.widgets {
                 log::trace!(
                     "[FocusDir]   widget[{}] id={:?} x={:.0} y={:.0} w={:.0} h={:.0}",
-                    idx,
-                    id,
-                    b.x,
-                    b.y,
-                    b.width,
-                    b.height,
+                    spot.index,
+                    spot.id,
+                    spot.bounds.x,
+                    spot.bounds.y,
+                    spot.bounds.width,
+                    spot.bounds.height,
                 );
             }
         }
@@ -535,8 +583,8 @@ where
             .and_then(|ti| {
                 scan.widgets
                     .iter()
-                    .find(|(i, _, _, _)| *i == ti)
-                    .map(|&(i, b, _, _)| (i, b))
+                    .find(|spot| spot.index == ti)
+                    .map(|spot| (spot.index, spot.bounds))
             })
             .or(scan.focused);
         if let Some(entry) = last {
@@ -589,7 +637,7 @@ fn find_directional_target(
             && scan
                 .widgets
                 .iter()
-                .any(|&(idx, b, _, _)| idx == last_idx && bounds_match(b, last_bounds))
+                .any(|spot| spot.index == last_idx && bounds_match(spot.bounds, last_bounds))
         {
             return Some(last_idx);
         }
@@ -602,11 +650,25 @@ fn find_directional_target(
     let origin = focused_bounds.center();
     let prev_center = PREV_FOCUS_CENTER.get();
 
+    // A move is governed by the group it starts from, so that a shelf inside a
+    // loose panel still keeps its own rules.
+    let group = scan
+        .widgets
+        .iter()
+        .find(|spot| spot.index == focused_idx)
+        .map_or_else(FocusGroup::default, |spot| spot.group);
+
     // Best candidate: (index, in_beam, primary_edge_dist, beam_overlap,
     //                  cross_edge_dist, history_dist, focus_order).
     let mut best: Option<(usize, bool, f32, f32, f32, f32, u32)> = None;
 
-    for &(idx, bounds, _, order) in &scan.widgets {
+    for &Spot {
+        index: idx,
+        bounds,
+        order,
+        ..
+    } in &scan.widgets
+    {
         if idx == focused_idx {
             continue;
         }
@@ -625,10 +687,12 @@ fn find_directional_target(
             continue;
         }
 
-        // A horizontal move stays on its row: a candidate off the row is not
-        // a candidate at all. Vertical moves keep the out-of-beam fallback —
-        // stepping between sections of different widths is the point of it.
-        if matches!(direction, FocusDirection::Left | FocusDirection::Right)
+        // Unless its group says otherwise, a horizontal move stays on its row:
+        // a candidate off the row is not a candidate at all. Vertical moves
+        // always keep the out-of-beam fallback — stepping between sections of
+        // different widths is the point of it.
+        if !group.horizontal_leaves_row
+            && matches!(direction, FocusDirection::Left | FocusDirection::Right)
             && !shares_band(focused_bounds, bounds)
         {
             continue;
@@ -749,13 +813,17 @@ fn find_directional_target(
 /// Whether two rectangles sit on the same row: one's vertical centre line
 /// falls inside the other's extent.
 ///
-/// This gates horizontal focus movement. Left/Right are how a user walks a
-/// row — a toolbar, a chip strip, a shelf of cards — and at either end of one
-/// there is simply nothing further along. Ranked purely by distance, though,
-/// the weighted out-of-beam fallback always has *something* to offer, so the
-/// press reaches across the page and focus appears to escape. Requiring a
-/// shared row lets a move cross between neighbouring widgets of unequal
-/// height, and stop dead at the end of the row.
+/// This gates horizontal focus movement for groups that ask for it, which is
+/// the default. Left/Right are how a user walks a row — a toolbar, a chip
+/// strip, a shelf of cards — and at either end of one there is simply nothing
+/// further along. Ranked purely by distance, though, the weighted out-of-beam
+/// fallback always has *something* to offer, so the press reaches across the
+/// page and focus appears to escape. Requiring a shared row lets a move cross
+/// between neighbouring widgets of unequal height, and stop dead at the end of
+/// the row.
+///
+/// A region that lays its controls out at differing heights on purpose opts
+/// out with [`FocusGroup::horizontal_leaves_row`].
 ///
 /// Centre-line containment rather than bare overlap: two stacked rows grazing
 /// each other by a pixel are not the same row.
@@ -796,20 +864,20 @@ fn bounds_match(a: Rectangle, b: Rectangle) -> bool {
 /// Pressing Up → user is below → start from the bottom-most widget.
 /// Pressing Down → user is above → start from the top-most widget.
 fn edge_widget(scan: &SpatialScan, direction: FocusDirection) -> usize {
-    let &(idx, _, _, _) = scan
+    let spot = scan
         .widgets
         .iter()
         .max_by(|a, b| {
-            let val = |w: &(usize, Rectangle, Option<Id>, u32)| -> f32 {
+            let val = |w: &Spot| -> f32 {
                 match direction {
                     // Pressing Up → want bottom-most (max y)
-                    FocusDirection::Up => w.1.y + w.1.height,
+                    FocusDirection::Up => w.bounds.y + w.bounds.height,
                     // Pressing Down → want top-most (min y → negate for max_by)
-                    FocusDirection::Down => -(w.1.y),
+                    FocusDirection::Down => -(w.bounds.y),
                     // Pressing Left → want right-most (max x)
-                    FocusDirection::Left => w.1.x + w.1.width,
+                    FocusDirection::Left => w.bounds.x + w.bounds.width,
                     // Pressing Right → want left-most (min x → negate)
-                    FocusDirection::Right => -(w.1.x),
+                    FocusDirection::Right => -(w.bounds.x),
                 }
             };
             val(a)
@@ -817,7 +885,7 @@ fn edge_widget(scan: &SpatialScan, direction: FocusDirection) -> usize {
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
         .unwrap_or(&scan.widgets[0]);
-    idx
+    spot.index
 }
 
 /// Wraps focus to the opposite edge when no candidate exists in the
@@ -835,14 +903,14 @@ fn wrap_widget(scan: &SpatialScan, focused_idx: usize, direction: FocusDirection
     let has_distinct_positions = {
         let tolerance = 1.0_f32;
         let first = scan.widgets.first().map(|w| match direction {
-            FocusDirection::Left | FocusDirection::Right => w.1.x,
-            FocusDirection::Up | FocusDirection::Down => w.1.y,
+            FocusDirection::Left | FocusDirection::Right => w.bounds.x,
+            FocusDirection::Up | FocusDirection::Down => w.bounds.y,
         });
         first.is_some_and(|first_val| {
             scan.widgets.iter().any(|w| {
                 let val = match direction {
-                    FocusDirection::Left | FocusDirection::Right => w.1.x,
-                    FocusDirection::Up | FocusDirection::Down => w.1.y,
+                    FocusDirection::Left | FocusDirection::Right => w.bounds.x,
+                    FocusDirection::Up | FocusDirection::Down => w.bounds.y,
                 };
                 (val - first_val).abs() > tolerance
             })
@@ -869,8 +937,18 @@ fn wrap_widget(scan: &SpatialScan, focused_idx: usize, direction: FocusDirection
 
 #[cfg(test)]
 mod tests {
-    use super::{FocusDirection, SpatialScan, find_directional_target};
+    use super::{FocusDirection, FocusGroup, SpatialScan, Spot, find_directional_target};
     use crate::Rectangle;
+
+    /// The default: Left/Right stay on their row.
+    const ROW_LOCKED: FocusGroup = FocusGroup {
+        horizontal_leaves_row: false,
+    };
+
+    /// A panel that places its controls at differing heights on purpose.
+    const FREE: FocusGroup = FocusGroup {
+        horizontal_leaves_row: true,
+    };
 
     fn rect(x: f32, y: f32, width: f32, height: f32) -> Rectangle {
         Rectangle {
@@ -881,22 +959,37 @@ mod tests {
         }
     }
 
-    /// A scan of `widgets` in tree order with `focused` holding focus.
-    fn scan(widgets: &[Rectangle], focused: usize) -> SpatialScan {
+    /// A scan of `widgets` in tree order with `focused` holding focus, every
+    /// widget in the same `group`.
+    fn scan(widgets: &[Rectangle], focused: usize, group: FocusGroup) -> SpatialScan {
+        grouped_scan(
+            &widgets.iter().map(|&b| (b, group)).collect::<Vec<_>>(),
+            focused,
+        )
+    }
+
+    /// A scan where each widget carries its own group, as nesting produces.
+    fn grouped_scan(widgets: &[(Rectangle, FocusGroup)], focused: usize) -> SpatialScan {
         SpatialScan {
             widgets: widgets
                 .iter()
                 .enumerate()
-                .map(|(i, &bounds)| (i, bounds, None, u32::MAX))
+                .map(|(index, &(bounds, group))| Spot {
+                    index,
+                    bounds,
+                    id: None,
+                    order: u32::MAX,
+                    group,
+                })
                 .collect(),
-            focused: Some((focused, widgets[focused])),
+            focused: Some((focused, widgets[focused].0)),
             total: widgets.len(),
             ..SpatialScan::default()
         }
     }
 
     fn go(widgets: &[Rectangle], focused: usize, direction: FocusDirection) -> Option<usize> {
-        find_directional_target(&scan(widgets, focused), direction, false)
+        find_directional_target(&scan(widgets, focused, ROW_LOCKED), direction, false)
     }
 
     /// The top-left menu row: a 64px avatar beside 56px icon buttons, centres
@@ -975,5 +1068,54 @@ mod tests {
 
         assert_eq!(go(&page, 0, FocusDirection::Down), Some(1));
         assert_eq!(go(&page, 1, FocusDirection::Up), Some(0));
+    }
+
+    /// A details panel puts a tall action column beside shorter tiles and
+    /// expects Left/Right to reach across them.
+    #[test]
+    fn a_group_can_let_a_horizontal_move_leave_its_row() {
+        let panel = [
+            rect(64.0, 100.0, 300.0, 400.0), // action column, tall
+            rect(400.0, 560.0, 200.0, 90.0), // a tile, below and to the right
+        ];
+
+        let free = scan(&panel, 0, FREE);
+        assert_eq!(
+            find_directional_target(&free, FocusDirection::Right, false),
+            Some(1)
+        );
+
+        // The same geometry stays put under the default.
+        assert_eq!(go(&panel, 0, FocusDirection::Right), None);
+    }
+
+    /// The nesting Flutter relies on: a shelf keeps its own rules inside a
+    /// panel that has looser ones, because the group a move *starts from*
+    /// governs it.
+    #[test]
+    fn an_inner_group_overrides_the_panel_around_it() {
+        let page = [
+            (rect(64.0, 100.0, 300.0, 400.0), FREE), // panel control
+            (rect(64.0, 560.0, 300.0, 200.0), ROW_LOCKED), // shelf card
+            (rect(400.0, 560.0, 300.0, 200.0), ROW_LOCKED), // shelf card, last
+            (rect(800.0, 900.0, 300.0, 200.0), FREE), // something further down
+        ];
+
+        // Along the shelf: ordinary in-row movement.
+        assert_eq!(
+            find_directional_target(&grouped_scan(&page, 1), FocusDirection::Right, false),
+            Some(2)
+        );
+        // Off the end of the shelf: the shelf's own rule holds, even though the
+        // panel around it would have allowed the jump.
+        assert_eq!(
+            find_directional_target(&grouped_scan(&page, 2), FocusDirection::Right, false),
+            None
+        );
+        // From the panel control, the looser rule still applies.
+        assert_eq!(
+            find_directional_target(&grouped_scan(&page, 0), FocusDirection::Right, false),
+            Some(2)
+        );
     }
 }
