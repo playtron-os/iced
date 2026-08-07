@@ -1424,19 +1424,34 @@ where
             Event::Keyboard(keyboard::Event::KeyReleased { key, .. }) => {
                 let state = state::<Renderer>(tree);
 
+                // A read still in flight is left alone. The clipboard is
+                // answered by another process, so the round trip easily
+                // outlasts a quick tap of `Ctrl+V` — and clearing it here made
+                // the content arrive to find nothing waiting for it, so the
+                // paste silently did not happen. How often that bit depended
+                // on how fast the answer came back.
+                if !matches!(state.is_pasting, Some(Paste::Reading)) {
+                    state.is_pasting = None;
+                }
+
                 if state.is_focused.is_some()
                     && let keyboard::Key::Character("v") = key.as_ref()
                 {
-                    state.is_pasting = None;
                     shell.capture_event();
                 }
-
-                state.is_pasting = None;
             }
             Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                 let state = state::<Renderer>(tree);
 
                 state.keyboard_modifiers = *modifiers;
+            }
+            Event::Clipboard(clipboard::Event::Read(Err(_))) => {
+                // Nothing is coming. Recovering here rather than on the next
+                // key release is what lets the release leave a live read
+                // alone: without somewhere for a failure to land, a read that
+                // never answered would leave every later `Ctrl+V` returning
+                // early against a state that outlived its request.
+                state::<Renderer>(tree).is_pasting = None;
             }
             Event::Clipboard(clipboard::Event::Read(Ok(content))) => {
                 let Some(on_input) = &self.on_input else {
