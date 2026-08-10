@@ -9,7 +9,16 @@ struct Uniforms {
     // border_radius = (top_left, top_right, bottom_right, bottom_left) in pixels
     border_radius: vec4<f32>,
     // fade_params.x = fade_start (0.0–1.0 fraction of bounds height)
+    // fade_params.y = 1.0 on the restore pass (emit the complementary weight)
+    // fade_params.z = region alpha (1.0 = full strength). Must be 1.0 on any
+    //                 pass outside the erase/restore/blur crossfade, or that
+    //                 pass renders nothing.
+    // fade_params.w = reserved
     fade_params: vec4<f32>,
+    // filter_params.x = CSS saturate() amount (1.0 = identity)
+    // filter_params.y = 1.0 when the render target format is *Srgb
+    // filter_params.z/w = reserved
+    filter_params: vec4<f32>,
 }
 
 @group(0) @binding(1)
@@ -77,6 +86,75 @@ fn get_corner_radius(pos: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>) -> 
     }
 }
 
+// ---------------------------------------------------------------------------
+// CSS saturate()
+//
+// Filter Effects L1 defines saturate(N) as feColorMatrix type="saturate", whose
+// 3x3 is a lerp between the luma-flattening rank-1 matrix and the identity:
+//
+//     M(N) = (1 - N) * L + N * I,   every row of L = (0.213, 0.715, 0.072)
+//
+// so mix(vec3(luma), rgb, N) is that matrix exactly, not an approximation of it.
+// ---------------------------------------------------------------------------
+
+// Verbatim from the spec matrix: BT.709 primaries rounded to three decimals.
+// NOT Rec.601's 0.299/0.587/0.114, which is a different and visibly wrong set.
+const CSS_SATURATE_LUMA: vec3<f32> = vec3<f32>(0.213, 0.715, 0.072);
+
+// IEC 61966-2-1, needed only when the target is an *Srgb format: there the
+// hardware has already decoded the sample to linear light, and CSS filters are
+// specified on sRGB-encoded values.
+fn blur_linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let safe = max(c, vec3<f32>(0.0));
+    let lo = safe * 12.92;
+    let hi = 1.055 * pow(safe, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, safe <= vec3<f32>(0.0031308));
+}
+
+fn blur_srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let safe = max(c, vec3<f32>(0.0));
+    let lo = safe / 12.92;
+    let hi = pow((safe + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, safe <= vec3<f32>(0.04045));
+}
+
+// premul:    premultiplied RGBA, as sampled from and written back to the target
+// amount:    CSS saturate() amount (1.0 identity, 0.0 greyscale, >1 super)
+// is_linear: 1.0 when the target format is *Srgb, 0.0 for a plain UNORM
+fn css_saturate(premul: vec4<f32>, amount: f32, is_linear: f32) -> vec4<f32> {
+    let a = premul.a;
+
+    if (is_linear < 0.5) {
+        // Plain UNORM target — what the `web-colors` configuration produces.
+        // The sample is already sRGB-encoded, which is the space CSS filters
+        // are defined in, so there is no transfer to do. With no transfer the
+        // whole operation is linear in alpha and the spec's un-premultiply
+        // collapses:
+        //     M(a*c)             == a * M(c)              (M is a pure 3x3)
+        //     clamp(a*x, 0.0, a) == a * clamp(x, 0.0, 1.0) (a >= 0)
+        // so clamping the premultiplied value is identical to
+        // un-premultiply -> saturate -> clamp -> re-premultiply, minus a
+        // divide. The ceiling is `a`, NOT 1.0 — clamping to 1.0 lets a channel
+        // exceed its own alpha and shifts hue in the highlights.
+        let luma_p = dot(premul.rgb, CSS_SATURATE_LUMA);
+        let sat_p = mix(vec3<f32>(luma_p), premul.rgb, amount);
+        return vec4<f32>(clamp(sat_p, vec3<f32>(0.0), vec3<f32>(a)), a);
+    }
+
+    // *Srgb target: the sample is linear light, and the sRGB transfer does not
+    // commute with the alpha scale, so here the un-premultiply is mandatory.
+    if (a < 1.0e-5) {
+        return premul;
+    }
+    var rgb = clamp(premul.rgb / a, vec3<f32>(0.0), vec3<f32>(1.0));
+    rgb = blur_linear_to_srgb(rgb);
+    let luma = dot(rgb, CSS_SATURATE_LUMA);
+    rgb = mix(vec3<f32>(luma), rgb, amount);
+    rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    rgb = blur_srgb_to_linear(rgb);
+    return vec4<f32>(rgb * a, a);
+}
+
 // Compute Gaussian weight for a given offset and sigma
 fn gaussian(x: f32, sigma: f32) -> f32 {
     let coeff = 1.0 / (sqrt(2.0 * 3.14159265) * sigma);
@@ -116,20 +194,31 @@ fn fs_main(
     let dist = rounded_rect_sdf(pos, half_size, corner_radius);
     var sdf_alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
 
-    // Apply vertical fade: full opacity above fade_start, linear fade to 0 at bottom.
+    // Crossfade weight for this pass = vertical fade x region alpha.
+    //
+    // The erase pass clears the SDF region, the restore pass additively adds
+    // the ORIGINAL scene at (1 - weight) and the final blur pass adds the
+    // blurred scene at (weight), so the two always sum to exactly 1 inside the
+    // SDF. Driving the weight with the region's opacity therefore gives an
+    // exact crossfade between "no filter" and "full filter": at alpha 1 the
+    // output is what it always was, and at alpha 0 the region is a pixel-exact
+    // no-op rather than a hole.
+    //
+    // The inversion sits outside the fade_start guard on purpose — the restore
+    // pass has to work when the only thing being faded is the region alpha.
+    var weight = 1.0;
     let fade_start = u_uniforms.fade_params.x;
     if (fade_start < 1.0) {
         let bounds_top_px = u_uniforms.clip_bounds.y * tex_height;
         let bounds_height_px = u_uniforms.clip_bounds.w * tex_height;
         let local_y = (frag_pos.y - bounds_top_px) / bounds_height_px;
-        var fade_alpha = 1.0 - smoothstep(fade_start, 1.0, local_y);
-        // Invert fade for restore pass: output (1-fade)*sdf to additively
-        // blend the original scene back in the fade region.
-        if (u_uniforms.fade_params.y > 0.5) {
-            fade_alpha = 1.0 - fade_alpha;
-        }
-        sdf_alpha = sdf_alpha * fade_alpha;
+        weight = 1.0 - smoothstep(fade_start, 1.0, local_y);
     }
+    weight = weight * u_uniforms.fade_params.z;
+    if (u_uniforms.fade_params.y > 0.5) {
+        weight = 1.0 - weight;
+    }
+    sdf_alpha = sdf_alpha * weight;
 
     // Erase mode (radius < 0): output pure SDF alpha for destination-out blending.
     // The erase pipeline uses blend: src*0 + dst*(1-src_alpha), so only alpha matters.
@@ -205,10 +294,22 @@ fn fs_main(
 
     let final_color = color / total_weight;
 
+    // CSS applies a backdrop-filter list in order, so `blur(R) saturate(N)`
+    // saturates the finished blur — exactly once. Only one uniform block ever
+    // carries a non-identity amount: the final vertical pass. The erase pass
+    // returned above; the restore pass, the five intermediate ping-pong passes
+    // and both blits carry 1.0 and short-circuit here. The epsilon guard is
+    // what makes identity bit-exact whatever the driver does with FMA.
+    let saturation = u_uniforms.filter_params.x;
+    var out_color = final_color;
+    if (abs(saturation - 1.0) > 0.001) {
+        out_color = css_saturate(final_color, saturation, u_uniforms.filter_params.y);
+    }
+
     // Scale the premultiplied blur result by SDF alpha.
     // The erase pass already cleared the target, so premultiplied alpha blending
     // writes the blur result directly: src + dst*(1-src_alpha) = src + 0 = src.
     // Where content was opaque, blur_alpha ≈ 1 → compositor sees opaque blurred content.
     // Where content was transparent, blur_alpha ≈ 0 → compositor blur shows through.
-    return final_color * sdf_alpha;
+    return out_color * sdf_alpha;
 }

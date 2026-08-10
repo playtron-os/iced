@@ -153,12 +153,15 @@ pub trait Renderer {
     /// * `bounds` - The area where the blur effect applies
     /// * `radius` - The blur radius in logical pixels
     /// * `border_radius` - Border radius [top_left, top_right, bottom_right, bottom_left] in logical pixels
+    /// * `fade_start` - Fraction (0.0–1.0) of the bounds height above which the effect is at full strength
+    /// * `saturation` - CSS `saturate()` amount applied to the blurred backdrop (1.0 = unchanged)
     fn draw_backdrop_blur(
         &mut self,
         _bounds: Rectangle,
         _radius: f32,
         _border_radius: [f32; 4],
         _fade_start: f32,
+        _saturation: f32,
     ) {
     }
 

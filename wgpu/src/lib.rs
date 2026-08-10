@@ -2253,7 +2253,18 @@ impl core::Renderer for Renderer {
         radius: f32,
         border_radius: [f32; 4],
         fade_start: f32,
+        saturation: f32,
     ) {
+        // Every other draw path scales itself by the opacity stack at record
+        // time; this one records a region the blur pipeline replays later, so
+        // it has to read the stack itself. Without this the frosted patch pops
+        // in at full strength on the first frame of a fade while the content
+        // above it ramps.
+        let opacity = self.current_opacity();
+        if opacity <= 0.001 {
+            return;
+        }
+
         // Transform bounds from content-space to screen-space so the blur region
         // is placed correctly when drawn inside a with_translation/with_transformation.
         let transformation = self.layers.transformation();
@@ -2283,7 +2294,9 @@ impl core::Renderer for Renderer {
             radius,
             border_radius,
             fade_start,
-        );
+            saturation,
+        )
+        .with_alpha(opacity);
         self.blur_state.add_region(blur, layer_count);
 
         log::trace!(

@@ -395,6 +395,9 @@ where
                 MENU_BACKDROP_BLUR_RADIUS,
                 <[f32; 4]>::from(style.border.radius),
                 1.0,
+                // Blur only — a pick-list menu takes its colour from the style
+                // it was given, so leave the backdrop's saturation alone.
+                1.0,
             );
             // Draw the panel + items in a post-blur layer so they composite on
             // top of the blurred backdrop rather than being blurred themselves.

@@ -57,6 +57,9 @@ pub struct BackdropBlur<'a, Message, Theme = crate::Theme, Renderer = crate::Ren
     /// Full blur above this point, linearly fading to 0 at the bottom.
     /// 1.0 = no fade (default).
     fade_start: f32,
+    /// CSS `saturate()` amount applied to the blurred backdrop.
+    /// 1.0 = unchanged (default).
+    saturation: f32,
     width: Length,
     height: Length,
 }
@@ -71,9 +74,21 @@ impl<'a, Message, Theme, Renderer> BackdropBlur<'a, Message, Theme, Renderer> {
             blur_radius: 10.0,
             border_radius: [0.0; 4],
             fade_start: 1.0,
+            saturation: 1.0,
             width: Length::Shrink,
             height: Length::Shrink,
         }
+    }
+
+    /// Sets the CSS `saturate()` amount applied to the blurred backdrop.
+    ///
+    /// `1.0` leaves colour untouched, `0.0` is greyscale, and above `1.0`
+    /// pushes saturation up — the second half of a CSS
+    /// `backdrop-filter: blur(Npx) saturate(M)`. Applied to the finished blur,
+    /// exactly as the CSS filter list orders it.
+    pub fn saturation(mut self, saturation: f32) -> Self {
+        self.saturation = saturation.max(0.0);
+        self
     }
 
     /// Sets the blur radius in logical pixels.
@@ -234,7 +249,15 @@ where
         // Only use the post-blur layer mechanism when we actually have a meaningful blur effect.
         // For blur_radius < 3.0, the W3C box blur formula produces very few samples (box_size < 6),
         // resulting in negligible visual blur while still incurring full pipeline overhead.
-        if self.blur_radius >= 3.0 {
+        //
+        // Saturation alone is reason enough to run the pipeline, though: a
+        // radius under 3 still copies the backdrop faithfully (sigma clamps to
+        // 1, giving a single centre tap), so `saturate()` without `blur()` is a
+        // legitimate request and must not fall into the branch that draws
+        // neither the effect nor a post-blur layer.
+        let filters = self.blur_radius >= 3.0 || (self.saturation - 1.0).abs() > 0.001;
+
+        if filters {
             // Draw the backdrop blur effect at this location
             // This blurs whatever was rendered before this widget
             renderer.draw_backdrop_blur(
@@ -242,6 +265,7 @@ where
                 self.blur_radius,
                 self.border_radius,
                 self.fade_start,
+                self.saturation,
             );
 
             // Draw the content in a post-blur layer so it appears ON TOP of the blur

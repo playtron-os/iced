@@ -123,11 +123,12 @@ where
         radius: f32,
         border_radius: [f32; 4],
         fade_start: f32,
+        saturation: f32,
     ) {
         delegate!(
             self,
             renderer,
-            renderer.draw_backdrop_blur(bounds, radius, border_radius, fade_start)
+            renderer.draw_backdrop_blur(bounds, radius, border_radius, fade_start, saturation)
         );
     }
 
