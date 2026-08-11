@@ -2306,6 +2306,10 @@ impl core::Renderer for Renderer {
         );
     }
 
+    fn has_post_blur_content(&self) -> bool {
+        self.blur_state.has_post_blur_content() || self.blur_state.has_regions()
+    }
+
     fn start_post_blur_layer(&mut self, bounds: Rectangle) {
         // Transform bounds from content-space to screen-space
         let transformation = self.layers.transformation();

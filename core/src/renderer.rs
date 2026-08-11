@@ -174,6 +174,20 @@ pub trait Renderer {
     /// Ends recording post-blur content.
     fn end_post_blur_layer(&mut self) {}
 
+    /// Whether anything drawn so far is being held back to be composited after
+    /// the backdrop blur.
+    ///
+    /// Post-blur content is skipped by the normal pass and drawn at the end, so
+    /// it lands on top of everything — including anything drawn into an
+    /// ordinary layer afterwards. Something that has to be above *all* of it,
+    /// like an overlay, has to join that final pass rather than trust its
+    /// layer's position. This says whether there is anything to join: a
+    /// backdrop blur is expensive, and an interface that is not using one
+    /// should not start paying for it the moment a tooltip appears.
+    fn has_post_blur_content(&self) -> bool {
+        false
+    }
+
     /// Helper to draw content that appears on top of backdrop blur.
     ///
     /// This is a convenience wrapper around `start_post_blur_layer` and `end_post_blur_layer`.

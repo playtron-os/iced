@@ -528,7 +528,24 @@ where
             .map(overlay::Nested::new);
 
         if let Some(mut overlay) = overlay {
-            overlay.draw(renderer, theme, style, Layout::new(layout), cursor);
+            // Above everything, including anything the base tree is holding
+            // back for the pass that follows the backdrop blur — which is
+            // drawn last and so would otherwise cover it. A dialog on a pane
+            // of frosted glass is exactly that, and a menu opened inside one
+            // was being painted over by the card it belonged to: built, sized,
+            // taking clicks where it should be, and invisible.
+            //
+            // Only when there is such a pass to join. Deferring content is
+            // what makes the renderer copy the scene and composite it, and an
+            // interface with no blur in it should not start paying for that
+            // the moment a tooltip appears.
+            if renderer.has_post_blur_content() {
+                renderer.with_post_blur_layer(viewport, |renderer| {
+                    overlay.draw(renderer, theme, style, Layout::new(layout), cursor);
+                });
+            } else {
+                overlay.draw(renderer, theme, style, Layout::new(layout), cursor);
+            }
         }
     }
 

@@ -132,6 +132,10 @@ where
         );
     }
 
+    fn has_post_blur_content(&self) -> bool {
+        delegate!(self, renderer, renderer.has_post_blur_content())
+    }
+
     fn start_post_blur_layer(&mut self, bounds: Rectangle) {
         delegate!(self, renderer, renderer.start_post_blur_layer(bounds));
     }
