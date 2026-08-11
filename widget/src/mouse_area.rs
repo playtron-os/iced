@@ -377,11 +377,17 @@ fn update<Message: Clone, Theme, Renderer>(
                 shell.capture_event();
             }
 
+            // A press that continues a click sequence belongs to that gesture,
+            // not to a drag.
+            let mut is_repeat_click = false;
+
             if let Some(position) = cursor_position
                 && let Some(message) = widget.on_double_click.as_ref()
             {
                 let new_click =
                     mouse::Click::new(position, mouse::Button::Left, state.previous_click);
+
+                is_repeat_click = new_click.kind() != mouse::click::Kind::Single;
 
                 if new_click.kind() == mouse::click::Kind::Double {
                     shell.publish(message.clone());
@@ -394,8 +400,10 @@ fn update<Message: Clone, Theme, Renderer>(
                 shell.capture_event();
             }
 
-            // Record press position for on_drag detection
-            if state.drag_initiated.is_none() && widget.on_drag.is_some() {
+            // Record press position for on_drag detection. Never on a repeat
+            // click: holding and moving after a double click would otherwise
+            // turn the gesture into a drag on top of the action it just fired.
+            if state.drag_initiated.is_none() && widget.on_drag.is_some() && !is_repeat_click {
                 state.drag_initiated = cursor_position;
             }
 
@@ -480,5 +488,114 @@ fn update<Message: Clone, Theme, Renderer>(
         && position.distance(origin) > LONG_PRESS_SLOP
     {
         state.long_press = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::Space;
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum Message {
+        Drag,
+        DoubleClick,
+    }
+
+    fn press() -> Event {
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+    }
+
+    fn release() -> Event {
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+    }
+
+    fn cursor_moved(x: f32) -> Event {
+        Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::new(x, 10.0),
+        })
+    }
+
+    /// Feeds `events` to a [`MouseArea`] with both `on_drag` and
+    /// `on_double_click`, tracking the cursor through every `CursorMoved`.
+    fn simulate(events: &[Event]) -> Vec<Message> {
+        let mut area: MouseArea<'_, Message> = MouseArea::new(Space::new())
+            .on_drag(Message::Drag)
+            .on_double_click(Message::DoubleClick);
+
+        let mut tree = Tree::new(&area as &dyn Widget<Message, crate::Theme, crate::Renderer>);
+        let node = layout::Node::new(Size::new(200.0, 50.0));
+
+        let mut position = Point::new(10.0, 10.0);
+        let mut messages = Vec::new();
+
+        for event in events {
+            if let Event::Mouse(mouse::Event::CursorMoved { position: moved }) = event {
+                position = *moved;
+            }
+
+            let mut shell = Shell::new(&mut messages);
+
+            update(
+                &mut area,
+                &mut tree,
+                event,
+                Layout::new(&node),
+                mouse::Cursor::Available(position),
+                &mut shell,
+            );
+        }
+
+        messages
+    }
+
+    #[test]
+    fn moving_after_a_single_click_starts_a_drag() {
+        assert_eq!(
+            simulate(&[press(), cursor_moved(40.0)]),
+            vec![Message::Drag]
+        );
+    }
+
+    #[test]
+    fn moving_on_the_second_click_does_not_start_a_drag() {
+        assert_eq!(
+            simulate(&[press(), release(), press(), cursor_moved(40.0)]),
+            vec![Message::DoubleClick]
+        );
+    }
+
+    #[test]
+    fn moving_on_a_third_click_does_not_start_a_drag_either() {
+        assert_eq!(
+            simulate(&[
+                press(),
+                release(),
+                press(),
+                release(),
+                press(),
+                cursor_moved(40.0),
+            ]),
+            vec![Message::DoubleClick]
+        );
+    }
+
+    #[test]
+    fn a_press_starting_a_new_sequence_drags_again() {
+        // Pressing far enough away breaks the click sequence, so this is a
+        // fresh single click and drags normally.
+        assert_eq!(
+            simulate(&[
+                press(),
+                release(),
+                press(),
+                release(),
+                cursor_moved(100.0),
+                press(),
+                cursor_moved(140.0),
+            ]),
+            vec![Message::DoubleClick, Message::Drag]
+        );
     }
 }
