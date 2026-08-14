@@ -1929,9 +1929,9 @@ async fn run_instance<P>(
                                 let child_popups: Vec<_> = popup_manager
                                     .iter()
                                     .filter(|(_, p)| p.parent_id == id && p.configured)
-                                    .map(|(pid, p)| (*pid, p.iced_id, p.winit_popup_id))
+                                    .map(|(pid, p)| (*pid, p.iced_id))
                                     .collect();
-                                for (popup_id, iced_id, winit_id) in child_popups {
+                                for (popup_id, iced_id) in child_popups {
                                     let _ = ui_caches.remove(&iced_id);
                                     let _ = user_interfaces.remove(&iced_id);
                                     let _ = popup_cursor_position.remove(&iced_id);
@@ -1940,11 +1940,12 @@ async fn run_instance<P>(
                                         iced_id,
                                         core::Event::Window(core::window::Event::Closed),
                                     ));
-                                    if let Some(wid) = winit_id {
-                                        let _ = control_sender.start_send(Control::DestroyPopup {
-                                            winit_popup_id: wid,
-                                        });
-                                    }
+                                    // The key IS the winit popup id -- see the note in
+                                    // `Action::Show` on why `Popup::winit_popup_id` can't
+                                    // be used here.
+                                    let _ = control_sender.start_send(Control::DestroyPopup {
+                                        winit_popup_id: popup_id.0,
+                                    });
                                 }
                             }
 
@@ -3256,13 +3257,24 @@ fn run_action<'a, P, C>(
                                     }
                                 };
 
-                                // Destroy any existing popups for this parent
+                                // Destroy any existing popups for this parent.
+                                //
+                                // Keyed off the map key, NOT `Popup::winit_popup_id`: the
+                                // entry is inserted with that field `None` and only filled
+                                // in at `configure`, so a popup replaced before the
+                                // compositor's first configure would be dropped from the
+                                // manager with its xdg_popup never destroyed. It stays
+                                // mapped and grabbed, and the next popup asking for a grab
+                                // is then not a child of the topmost popup --
+                                // `xdg_wm_base.not_the_topmost_popup`, which kills the
+                                // client. The key is the winit popup id (see the
+                                // `PopupCreated` insert), so it's always right.
                                 let existing: Vec<_> = popup_manager
                                     .iter()
                                     .filter(|(_, p)| p.parent_id == settings.parent)
-                                    .map(|(id, p)| (*id, p.iced_id, p.winit_popup_id))
+                                    .map(|(id, p)| (*id, p.iced_id))
                                     .collect();
-                                for (popup_id, iced_id, winit_id) in existing {
+                                for (popup_id, iced_id) in existing {
                                     let _ = ui_caches.remove(&iced_id);
                                     let _ = interfaces.remove(&iced_id);
                                     let _ = popup_manager.remove(popup_id);
@@ -3270,11 +3282,9 @@ fn run_action<'a, P, C>(
                                         iced_id,
                                         core::Event::Window(core::window::Event::Closed),
                                     ));
-                                    if let Some(wid) = winit_id {
-                                        let _ = control_sender.start_send(Control::DestroyPopup {
-                                            winit_popup_id: wid,
-                                        });
-                                    }
+                                    let _ = control_sender.start_send(Control::DestroyPopup {
+                                        winit_popup_id: popup_id.0,
+                                    });
                                 }
 
                                 // Determine popup size: use explicit size or auto-measure content
@@ -3356,12 +3366,13 @@ fn run_action<'a, P, C>(
                                         id,
                                         core::Event::Window(core::window::Event::Closed),
                                     ));
-                                    // Actually destroy the winit popup surface
-                                    if let Some(winit_id) = removed.winit_popup_id {
-                                        let _ = control_sender.start_send(Control::DestroyPopup {
-                                            winit_popup_id: winit_id,
-                                        });
-                                    }
+                                    // Actually destroy the winit popup surface. `removed.id`
+                                    // rather than `removed.winit_popup_id` -- hiding a popup
+                                    // before its first configure would otherwise leak it; see
+                                    // the note in `Action::Show`.
+                                    let _ = control_sender.start_send(Control::DestroyPopup {
+                                        winit_popup_id: removed.id.0,
+                                    });
                                 } else {
                                     tracing::warn!("Popup {:?} not found in popup_manager", id);
                                 }

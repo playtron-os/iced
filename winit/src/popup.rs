@@ -87,13 +87,20 @@ where
     C: Compositor,
 {
     /// The popup's iced ID.
-    #[allow(dead_code)]
+    ///
+    /// Also the manager's key, and `PopupId(winit_popup_id)` -- so this is the
+    /// one field that identifies the underlying xdg_popup from the moment it is
+    /// inserted. Destroy against this, not [`Popup::winit_popup_id`].
     pub id: PopupId,
     /// The popup's iced window ID (used for view lookup).
     pub iced_id: window::Id,
     /// Parent window ID.
     pub parent_id: window::Id,
-    /// The winit popup ID.
+    /// The winit popup ID, once the compositor has configured the popup.
+    ///
+    /// `None` between `PopupCreated` and `PopupConfigured`, when the xdg_popup
+    /// already exists -- so it is NOT a safe "does this have a surface to
+    /// destroy?" test. Use [`Popup::id`] for that.
     pub winit_popup_id: Option<u64>,
     /// Size of the popup.
     pub size: Size<u32>,
