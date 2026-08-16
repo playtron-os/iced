@@ -129,6 +129,45 @@ pub fn scroll_to<T>(target: Id, offset: AbsoluteOffset<Option<f32>>) -> impl Ope
     ScrollTo { target, offset }
 }
 
+/// Produces an [`Operation`] that animates the widget with the given [`Id`]
+/// to the provided [`AbsoluteOffset`].
+pub fn scroll_to_animated<T>(
+    target: Id,
+    offset: AbsoluteOffset<Option<f32>>,
+    animation: ScrollAnimation,
+) -> impl Operation<T> {
+    struct ScrollToAnimated {
+        target: Id,
+        offset: AbsoluteOffset<Option<f32>>,
+        animation: ScrollAnimation,
+    }
+
+    impl<T> Operation<T> for ScrollToAnimated {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
+            operate(self);
+        }
+
+        fn scrollable(
+            &mut self,
+            id: Option<&Id>,
+            _bounds: Rectangle,
+            _content_bounds: Rectangle,
+            _translation: Vector,
+            state: &mut dyn Scrollable,
+        ) {
+            if Some(&self.target) == id {
+                state.scroll_to_animated(self.offset, self.animation);
+            }
+        }
+    }
+
+    ScrollToAnimated {
+        target,
+        offset,
+        animation,
+    }
+}
+
 /// Produces an [`Operation`] that scrolls the widget with the given [`Id`] by
 /// the provided [`AbsoluteOffset`].
 pub fn scroll_by<T>(target: Id, offset: AbsoluteOffset) -> impl Operation<T> {
