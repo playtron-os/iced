@@ -1158,16 +1158,10 @@ fn is_private_use(c: char) -> bool {
 }
 
 /// Converts a winit special action event into an iced one.
-#[cfg(all(
-    feature = "wayland",
-    any(
-        target_os = "linux",
-        target_os = "dragonfly",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd",
-    )
-))]
+///
+/// Not gated to Wayland even though only Wayland ever produces one: the
+/// `WindowEvent` variant it converts is cross-platform, so gating the
+/// conversion would break every other target's build of this match.
 fn special_action_event(event: winit::event::SpecialActionEvent) -> special_action::Event {
     use winit::event::SpecialActionEvent;
 

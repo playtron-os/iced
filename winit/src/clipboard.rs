@@ -262,15 +262,17 @@ mod platform {
             callback(Err(Error::ClipboardUnavailable));
         }
 
-        /// Writes the given text contents to the [`Clipboard`].
+        /// Reads the current content of the primary selection as text.
         pub fn read_primary(&self, callback: impl FnOnce(Result<String, Error>)) {
             callback(Err(Error::ClipboardUnavailable));
         }
 
+        /// Writes the given text contents to the primary selection.
         pub fn write_primary(&mut self, _text: String, callback: impl FnOnce(Result<(), Error>)) {
             callback(Err(Error::ClipboardUnavailable));
         }
 
+        /// Writes the given contents to the [`Clipboard`].
         pub fn write(&mut self, _content: Content, callback: impl FnOnce(Result<(), Error>)) {
             callback(Err(Error::ClipboardUnavailable));
         }
