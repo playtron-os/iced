@@ -358,6 +358,17 @@ impl State {
         }
     }
 
+    /// Whether this state is holding on to any layer indices.
+    ///
+    /// Layer merging renumbers layers, so anything recorded as an index range
+    /// is invalidated by it. `prepare` asks every index-keeping state this
+    /// before merging; a state that answers wrongly loses its regions silently,
+    /// because a range that no longer resolves is indistinguishable from one
+    /// that was never recorded.
+    pub fn tracks_layers(&self) -> bool {
+        !self.completed_regions.is_empty() || self.active.is_some()
+    }
+
     /// Returns whether a gradient fade is currently active.
     pub fn is_active(&self) -> bool {
         self.active.is_some()

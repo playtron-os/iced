@@ -376,17 +376,34 @@ impl Renderer {
         let physical_bounds =
             Rectangle::<f32>::from(Rectangle::with_size(viewport.physical_size()));
 
-        // Only merge layers if there are no pending blur effects
-        // Layer merging changes indices which would break post-blur content tracking
-        let has_blur = self.blur_state.has_post_blur_content() || self.blur_state.has_regions();
+        // Merging renumbers layers, so it can only run when nothing is holding
+        // a layer index.
+        //
+        // Four separate effects record their regions as index ranges, and a
+        // range that no longer resolves is indistinguishable from one that was
+        // never recorded — the effect is dropped in silence. This guard used to
+        // ask only about blur, so a cached scale or a gradient fade on a frame
+        // with no blur on it had its indices renumbered underneath it and
+        // vanished. That surfaced as an animation whose opacity moved while its
+        // transform did not: `with_opacity` does not go through layer indices,
+        // and everything that does had quietly stopped applying.
+        let tracks_layers = self.blur_state.has_post_blur_content()
+            || self.blur_state.has_regions()
+            || self.cached_scale_state.tracks_layers()
+            || self.cached_draw_state.tracks_layers()
+            || self.gradient_fade.tracks_layers();
         log::trace!(
-            "PREPARE: has_blur={}, post_blur_content={}, regions={}",
-            has_blur,
+            "PREPARE: tracks_layers={}, post_blur_content={}, blur_regions={}, cached_scale={}, \
+             cached_draw={}, gradient_fade={}",
+            tracks_layers,
             self.blur_state.has_post_blur_content(),
-            self.blur_state.has_regions()
+            self.blur_state.has_regions(),
+            self.cached_scale_state.tracks_layers(),
+            self.cached_draw_state.tracks_layers(),
+            self.gradient_fade.tracks_layers()
         );
 
-        if !has_blur {
+        if !tracks_layers {
             log::trace!("PREPARE: merging layers");
             self.layers.merge();
         } else {

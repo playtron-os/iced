@@ -40,6 +40,15 @@ pub struct CachedScaleRegion {
     pub blur_radius: f32,
 }
 
+impl CachedScaleRegion {
+    /// Whether `self` encloses `other`'s whole layer range and is not `other`.
+    fn strictly_contains(&self, other: &Self) -> bool {
+        self.start_layer <= other.start_layer
+            && other.end_layer <= self.end_layer
+            && (self.start_layer, self.end_layer) != (other.start_layer, other.end_layer)
+    }
+}
+
 /// Sampling stops this many standard deviations out.
 ///
 /// A Gaussian is past 99.7% of its mass by 3σ, so tails beyond this are
@@ -407,8 +416,13 @@ impl Pipeline {
 pub struct State {
     /// Completed cached scale regions
     completed_regions: Vec<CachedScaleRegion>,
-    /// Active (not yet closed) cached scale
-    active: Option<ActiveCachedScale>,
+    /// Open regions, innermost last.
+    ///
+    /// A stack rather than one slot: content inside a scaled region can start a
+    /// region of its own, and with a single slot the inner `start` overwrote the
+    /// outer one, so the outer `end` found nothing and its region was never
+    /// recorded — the outer transform vanished without a word.
+    active: Vec<ActiveCachedScale>,
     /// Offscreen texture for rendering content
     offscreen_texture: Option<OffscreenTexture>,
     /// Scratch target for the horizontal half of a content blur.
@@ -472,10 +486,21 @@ impl State {
     pub fn new() -> Self {
         Self {
             completed_regions: Vec::new(),
-            active: None,
+            active: Vec::new(),
             offscreen_texture: None,
             blur_intermediate: None,
         }
+    }
+
+    /// Whether this state is holding on to any layer indices.
+    ///
+    /// Layer merging renumbers layers, so anything recorded as an index range
+    /// is invalidated by it. `prepare` asks every index-keeping state this
+    /// before merging; a state that answers wrongly loses its regions silently,
+    /// because a range that no longer resolves is indistinguishable from one
+    /// that was never recorded.
+    pub fn tracks_layers(&self) -> bool {
+        !self.completed_regions.is_empty() || !self.active.is_empty()
     }
 
     /// Starts a new cached scale region.
@@ -488,7 +513,7 @@ impl State {
         blur_radius: f32,
         current_layer_count: usize,
     ) {
-        self.active = Some(ActiveCachedScale {
+        self.active.push(ActiveCachedScale {
             bounds,
             clip_bounds,
             render_scale,
@@ -498,14 +523,19 @@ impl State {
         });
     }
 
-    /// Returns the render_scale of the currently active cached scale, if any.
+    /// Returns the render_scale of the innermost open region, if any.
     pub fn active_render_scale(&self) -> Option<f32> {
-        self.active.as_ref().map(|a| a.render_scale)
+        self.active.last().map(|a| a.render_scale)
+    }
+
+    /// Whether a region is open inside another one.
+    pub fn is_nested(&self) -> bool {
+        self.active.len() > 1
     }
 
     /// Ends the current cached scale and records the layer range.
     pub fn end(&mut self, current_layer_count: usize) -> Option<CachedScaleRegion> {
-        if let Some(active) = self.active.take() {
+        if let Some(active) = self.active.pop() {
             let region = CachedScaleRegion {
                 bounds: active.bounds,
                 clip_bounds: active.clip_bounds,
@@ -523,8 +553,32 @@ impl State {
     }
 
     /// Returns completed regions and clears the list.
+    ///
+    /// Regions that sit entirely inside another are dropped. Every layer in a
+    /// region is skipped by the normal pass and composited by that region
+    /// instead, so a nested pair would composite the inner layers twice —
+    /// once on its own and once again as part of its parent. Keeping the
+    /// outermost is the half that produces a correct picture; the inner
+    /// transform is lost, which is a real limitation, so it says so rather than
+    /// leaving someone to find it the way this bug was found.
     pub fn take_regions(&mut self) -> Vec<CachedScaleRegion> {
-        std::mem::take(&mut self.completed_regions)
+        let all = std::mem::take(&mut self.completed_regions);
+
+        let outermost: Vec<CachedScaleRegion> = all
+            .iter()
+            .filter(|region| !all.iter().any(|other| other.strictly_contains(region)))
+            .cloned()
+            .collect();
+
+        if outermost.len() != all.len() {
+            log::debug!(
+                "cached scale: {} nested region(s) dropped; only the outermost is composited, so \
+                 the inner scale will not appear. Use a plain transformation for the inner one.",
+                all.len() - outermost.len()
+            );
+        }
+
+        outermost
     }
 
     /// Returns true if a layer index is within any cached scale region.
@@ -537,7 +591,7 @@ impl State {
     /// Clears all pending state (called at the start of a new frame).
     pub fn clear(&mut self) {
         self.completed_regions.clear();
-        self.active = None;
+        self.active.clear();
     }
 
     /// Gets or creates an offscreen texture of the given size.
@@ -612,10 +666,105 @@ impl Default for State {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     /// The shader is compiled by the driver at first paint, so a WGSL mistake
     /// would surface as content that silently stops drawing rather than as a
     /// build failure. Running it through the same naga that will compile it for
     /// real catches that here instead.
+    fn region(start_layer: usize, end_layer: usize) -> CachedScaleRegion {
+        CachedScaleRegion {
+            bounds: Rectangle::with_size(Size::new(10.0, 10.0)),
+            clip_bounds: Rectangle::with_size(Size::new(10.0, 10.0)),
+            render_scale: 1.0,
+            display_scale: 1.0,
+            start_layer,
+            end_layer,
+            blur_radius: 0.0,
+        }
+    }
+
+    fn started(state: &mut State, at_layer: usize) {
+        state.start(
+            Rectangle::with_size(Size::new(10.0, 10.0)),
+            Rectangle::with_size(Size::new(10.0, 10.0)),
+            1.0,
+            1.0,
+            0.0,
+            at_layer,
+        );
+    }
+
+    /// Content inside a scaled region can scale something of its own. With a
+    /// single active slot the inner `start` overwrote the outer one and the
+    /// outer region was never recorded — its transform silently stopped
+    /// applying.
+    #[test]
+    fn a_nested_region_does_not_destroy_the_one_around_it() {
+        let mut state = State::new();
+        started(&mut state, 0);
+        started(&mut state, 2);
+
+        assert!(state.is_nested());
+        assert!(state.end(4).is_some(), "the inner region should close");
+        assert!(!state.is_nested());
+
+        let outer = state
+            .end(6)
+            .expect("the outer region must survive the inner one");
+        assert_eq!((outer.start_layer, outer.end_layer), (0, 6));
+    }
+
+    /// Every layer in a region is skipped by the normal pass and composited by
+    /// that region, so a nested pair would draw the inner layers twice.
+    #[test]
+    fn nested_regions_are_reduced_to_the_outermost() {
+        let mut state = State::new();
+        state.completed_regions = vec![region(2, 4), region(0, 6), region(8, 10)];
+
+        let taken = state.take_regions();
+        let ranges: Vec<(usize, usize)> =
+            taken.iter().map(|r| (r.start_layer, r.end_layer)).collect();
+
+        assert_eq!(
+            ranges,
+            vec![(0, 6), (8, 10)],
+            "the inner (2,4) should be dropped"
+        );
+    }
+
+    /// Identical ranges are not nested in each other, so neither may eat the
+    /// other — that would drop both.
+    #[test]
+    fn identical_ranges_both_survive() {
+        let mut state = State::new();
+        state.completed_regions = vec![region(0, 4), region(0, 4)];
+        assert_eq!(state.take_regions().len(), 2);
+    }
+
+    /// `prepare` merges layers only when nothing holds an index, and merging
+    /// renumbers them. A state that under-reports here loses its regions with
+    /// no error.
+    #[test]
+    fn an_open_region_reports_that_it_holds_layer_indices() {
+        let mut state = State::new();
+        assert!(!state.tracks_layers(), "a fresh state holds nothing");
+
+        started(&mut state, 0);
+        assert!(
+            state.tracks_layers(),
+            "an open region holds its start index"
+        );
+
+        let _ = state.end(2);
+        assert!(
+            state.tracks_layers(),
+            "a completed region still holds its range"
+        );
+
+        let _ = state.take_regions();
+        assert!(!state.tracks_layers(), "and stops once they are taken");
+    }
+
     #[test]
     fn shader_parses_and_validates() {
         use wgpu::naga::{front::wgsl, valid};
