@@ -110,6 +110,11 @@ impl App {
                 ..Default::default()
             },
             grab: false,
+            // These three landed after this example was written; a tooltip
+            // draws its own opaque card, so it wants none of them.
+            blur: false,
+            shadow: false,
+            corner_radius: None,
             input_passthrough: true,
             tooltip_offset: Some((self.offset_x, self.offset_y)),
             tooltip_anchor: Some(self.anchor),
