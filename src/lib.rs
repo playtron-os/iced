@@ -636,11 +636,6 @@ pub mod touch {
     pub use crate::core::touch::{Event, Finger};
 }
 
-pub mod voice_mode {
-    //! Listen and react to voice mode events from the compositor.
-    pub use crate::core::voice_mode::{Event, OrbState};
-}
-
 pub mod auto_hide {
     //! Listen and react to auto-hide visibility events from the compositor.
     pub use crate::core::auto_hide::Event;

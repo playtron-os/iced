@@ -10,7 +10,6 @@ use crate::keyboard;
 use crate::mouse;
 use crate::surface_visibility;
 use crate::touch;
-use crate::voice_mode;
 use crate::window;
 
 /// A user interface event.
@@ -35,9 +34,6 @@ pub enum Event {
 
     /// An input method event
     InputMethod(input_method::Event),
-
-    /// A voice mode event from the compositor
-    VoiceMode(voice_mode::Event),
 
     /// An auto-hide visibility event from the compositor
     AutoHide(auto_hide::Event),

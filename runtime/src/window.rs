@@ -240,11 +240,6 @@ pub enum Action {
     /// Recompute the layouts of all the windows.
     RelayoutAll,
 
-    /// Set exclusive mode for the window (COSMIC compositor protocol).
-    /// When enabled, all other windows are hidden. When disabled, other windows are restored.
-    /// Parameters are (window_id, exclusive).
-    SetExclusiveMode(Id, bool),
-
     /// Set corner radius for the window (COSMIC compositor protocol).
     /// Communicates corner radius hints to the compositor for blur outlines and rounded corners.
     /// Parameters are (window_id, top_left, top_right, bottom_right, bottom_left).
@@ -258,23 +253,6 @@ pub enum Action {
 
     /// Enable or disable blur behind the window at runtime.
     SetBlur(Id, bool),
-
-    /// Register the window to receive voice mode events (COSMIC compositor protocol).
-    /// Parameters are (window_id, is_default_receiver).
-    /// When is_default_receiver is true, this window receives events when no other receiver is active.
-    RegisterVoiceMode(Id, bool),
-
-    /// Unregister the window from receiving voice mode events (COSMIC compositor protocol).
-    UnregisterVoiceMode(Id),
-
-    /// Acknowledge a will_stop event from the compositor (COSMIC compositor protocol).
-    /// If freeze is true, the orb will freeze in place for processing.
-    /// If freeze is false, the orb will proceed with hiding.
-    VoiceAckStop(Id, u32, bool),
-
-    /// Dismiss the frozen voice orb (COSMIC compositor protocol).
-    /// Used when transcription completes without spawning a new window.
-    VoiceDismiss(Id),
 }
 
 /// A window managed by iced.
@@ -348,20 +326,6 @@ pub fn close_requests() -> Subscription<Id> {
     event::listen_with(|event, _status, id| {
         if let crate::core::Event::Window(Event::CloseRequested) = event {
             Some(id)
-        } else {
-            None
-        }
-    })
-}
-
-/// Subscribes to all voice mode events in the running application.
-///
-/// Returns the window ID and the voice mode event. You must call
-/// [`register_voice_mode`] on a window before it will receive these events.
-pub fn voice_mode_events() -> Subscription<(Id, crate::core::voice_mode::Event)> {
-    event::listen_with(|event, _status, id| {
-        if let crate::core::Event::VoiceMode(voice_event) = event {
-            Some((id, voice_event))
         } else {
             None
         }
@@ -820,20 +784,6 @@ pub fn allow_automatic_tabbing<T>(enabled: bool) -> Task<T> {
     )))
 }
 
-/// Sets exclusive mode for the window using the COSMIC exclusive mode protocol.
-///
-/// When enabled, all other windows on the screen are hidden/minimized.
-/// When disabled, previously hidden windows are restored.
-///
-/// ## Platform-specific
-/// - **COSMIC/Wayland:** Uses `zcosmic_exclusive_mode_v1` protocol.
-/// - **Other platforms:** No effect.
-pub fn set_exclusive_mode<T>(id: Id, exclusive: bool) -> Task<T> {
-    task::effect(crate::Action::Window(Action::SetExclusiveMode(
-        id, exclusive,
-    )))
-}
-
 /// Sets the corner radius for the window using the COSMIC corner radius protocol.
 ///
 /// Communicates corner radius hints to the compositor so it can draw proper
@@ -882,62 +832,4 @@ pub fn set_backdrop_color<T>(id: Id, r: u32, g: u32, b: u32, a: u32) -> Task<T> 
 /// - **Other platforms:** No effect.
 pub fn set_blur<T>(id: Id, blur: bool) -> Task<T> {
     task::effect(crate::Action::Window(Action::SetBlur(id, blur)))
-}
-
-/// Registers the window to receive voice mode events from the compositor.
-///
-/// When `is_default_receiver` is true, this window will receive voice mode events
-/// even when it doesn't have focus. Only one window should be the default receiver.
-///
-/// ## Platform-specific
-/// - **COSMIC/Wayland:** Uses `zcosmic_voice_mode_v1` protocol.
-/// - **Other platforms:** No effect.
-pub fn register_voice_mode<T>(id: Id, is_default_receiver: bool) -> Task<T> {
-    task::effect(crate::Action::Window(Action::RegisterVoiceMode(
-        id,
-        is_default_receiver,
-    )))
-}
-
-/// Unregisters the window from receiving voice mode events.
-///
-/// ## Platform-specific
-/// - **COSMIC/Wayland:** Uses `zcosmic_voice_mode_v1` protocol.
-/// - **Other platforms:** No effect.
-pub fn unregister_voice_mode<T>(id: Id) -> Task<T> {
-    task::effect(crate::Action::Window(Action::UnregisterVoiceMode(id)))
-}
-
-/// Acknowledges a will_stop event from the compositor.
-///
-/// This responds to a will_stop event, telling the compositor whether to
-/// freeze the orb (transcription processing) or proceed with hiding.
-///
-/// ## Arguments
-/// * `id` - The window ID of the voice mode receiver
-/// * `serial` - The serial from the will_stop event
-/// * `freeze` - If true, freeze the orb in place. If false, proceed with hiding.
-///
-/// ## Platform-specific
-/// - **COSMIC/Wayland:** Uses `zcosmic_voice_mode_v1` protocol's `ack_stop` request.
-/// - **Other platforms:** No effect.
-pub fn voice_ack_stop<T>(id: Id, serial: u32, freeze: bool) -> Task<T> {
-    task::effect(crate::Action::Window(Action::VoiceAckStop(
-        id, serial, freeze,
-    )))
-}
-
-/// Dismisses the frozen voice orb.
-///
-/// This tells the compositor to hide the orb when transcription completes
-/// without spawning a new window (e.g., empty result or error).
-///
-/// ## Arguments
-/// * `id` - The window ID of the voice mode receiver
-///
-/// ## Platform-specific
-/// - **COSMIC/Wayland:** Uses `zcosmic_voice_mode_v1` protocol's `dismiss` request.
-/// - **Other platforms:** No effect.
-pub fn voice_dismiss<T>(id: Id) -> Task<T> {
-    task::effect(crate::Action::Window(Action::VoiceDismiss(id)))
 }

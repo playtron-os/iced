@@ -2971,24 +2971,6 @@ fn run_action<'a, P, C>(
                     }
                 }
             }
-            window::Action::SetExclusiveMode(id, exclusive) => {
-                #[cfg(all(
-                    feature = "wayland",
-                    any(
-                        target_os = "linux",
-                        target_os = "dragonfly",
-                        target_os = "freebsd",
-                        target_os = "netbsd",
-                        target_os = "openbsd",
-                    )
-                ))]
-                {
-                    use winit::platform::wayland::WindowExtWayland;
-                    if let Some(window) = window_manager.get_mut(id) {
-                        let _ = window.raw.set_exclusive_mode(exclusive);
-                    }
-                }
-            }
             window::Action::SetCornerRadius(id, top_left, top_right, bottom_right, bottom_left) => {
                 #[cfg(all(
                     feature = "wayland",
@@ -3033,78 +3015,6 @@ fn run_action<'a, P, C>(
             window::Action::SetBlur(id, blur) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.set_blur(blur);
-                }
-            }
-            window::Action::RegisterVoiceMode(id, is_default) => {
-                #[cfg(all(
-                    feature = "wayland",
-                    any(
-                        target_os = "linux",
-                        target_os = "dragonfly",
-                        target_os = "freebsd",
-                        target_os = "netbsd",
-                        target_os = "openbsd",
-                    )
-                ))]
-                {
-                    use winit::platform::wayland::WindowExtWayland;
-                    if let Some(window) = window_manager.get_mut(id) {
-                        let _ = window.raw.register_voice_mode(is_default);
-                    }
-                }
-            }
-            window::Action::UnregisterVoiceMode(id) => {
-                #[cfg(all(
-                    feature = "wayland",
-                    any(
-                        target_os = "linux",
-                        target_os = "dragonfly",
-                        target_os = "freebsd",
-                        target_os = "netbsd",
-                        target_os = "openbsd",
-                    )
-                ))]
-                {
-                    use winit::platform::wayland::WindowExtWayland;
-                    if let Some(window) = window_manager.get_mut(id) {
-                        let _ = window.raw.unregister_voice_mode();
-                    }
-                }
-            }
-            window::Action::VoiceAckStop(id, serial, freeze) => {
-                #[cfg(all(
-                    feature = "wayland",
-                    any(
-                        target_os = "linux",
-                        target_os = "dragonfly",
-                        target_os = "freebsd",
-                        target_os = "netbsd",
-                        target_os = "openbsd",
-                    )
-                ))]
-                {
-                    use winit::platform::wayland::WindowExtWayland;
-                    if let Some(window) = window_manager.get_mut(id) {
-                        let _ = window.raw.voice_ack_stop(serial, freeze);
-                    }
-                }
-            }
-            window::Action::VoiceDismiss(id) => {
-                #[cfg(all(
-                    feature = "wayland",
-                    any(
-                        target_os = "linux",
-                        target_os = "dragonfly",
-                        target_os = "freebsd",
-                        target_os = "netbsd",
-                        target_os = "openbsd",
-                    )
-                ))]
-                {
-                    use winit::platform::wayland::WindowExtWayland;
-                    if let Some(window) = window_manager.get_mut(id) {
-                        let _ = window.raw.voice_dismiss();
-                    }
                 }
             }
         },
