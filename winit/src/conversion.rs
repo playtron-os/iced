@@ -5,6 +5,7 @@
 use crate::core::input_method;
 use crate::core::keyboard;
 use crate::core::mouse;
+use crate::core::special_action;
 use crate::core::theme;
 use crate::core::touch;
 use crate::core::window;
@@ -310,6 +311,9 @@ pub fn window_event(
             Some(Event::Window(window::Event::Rescaled(scale_factor as f32)))
         }
         WindowEvent::Dnd(dnd_event) => Some(Event::Dnd(dnd_window_event(dnd_event))),
+        WindowEvent::SpecialAction(action) => {
+            Some(Event::SpecialAction(special_action_event(action)))
+        }
         _ => None,
     }
 }
@@ -1151,6 +1155,28 @@ pub fn ime_purpose(purpose: input_method::Purpose) -> winit::window::ImePurpose 
 // See: https://en.wikipedia.org/wiki/Private_Use_Areas
 fn is_private_use(c: char) -> bool {
     ('\u{E000}'..='\u{F8FF}').contains(&c)
+}
+
+/// Converts a winit special action event into an iced one.
+#[cfg(all(
+    feature = "wayland",
+    any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+    )
+))]
+fn special_action_event(event: winit::event::SpecialActionEvent) -> special_action::Event {
+    use winit::event::SpecialActionEvent;
+
+    match event {
+        SpecialActionEvent::Activate => special_action::Event::Activate,
+        SpecialActionEvent::HoldStart => special_action::Event::HoldStart,
+        SpecialActionEvent::HoldEnd => special_action::Event::HoldEnd,
+        SpecialActionEvent::Cancel => special_action::Event::Cancel,
+    }
 }
 
 /// Converts a winit DnD window event into an iced DnD event.

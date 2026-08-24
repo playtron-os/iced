@@ -636,6 +636,11 @@ pub mod touch {
     pub use crate::core::touch::{Event, Finger};
 }
 
+pub mod special_action {
+    //! Listen and react to the device's special key.
+    pub use crate::core::special_action::Event;
+}
+
 pub mod auto_hide {
     //! Listen and react to auto-hide visibility events from the compositor.
     pub use crate::core::auto_hide::Event;

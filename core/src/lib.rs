@@ -29,6 +29,7 @@ pub mod mouse;
 pub mod overlay;
 pub mod padding;
 pub mod renderer;
+pub mod special_action;
 pub mod surface_visibility;
 pub mod svg;
 pub mod text;

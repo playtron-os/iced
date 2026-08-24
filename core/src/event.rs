@@ -8,6 +8,7 @@ use crate::focus;
 use crate::input_method;
 use crate::keyboard;
 use crate::mouse;
+use crate::special_action;
 use crate::surface_visibility;
 use crate::touch;
 use crate::window;
@@ -34,6 +35,9 @@ pub enum Event {
 
     /// An input method event
     InputMethod(input_method::Event),
+
+    /// The device's special key was used while this surface was the receiver
+    SpecialAction(special_action::Event),
 
     /// An auto-hide visibility event from the compositor
     AutoHide(auto_hide::Event),

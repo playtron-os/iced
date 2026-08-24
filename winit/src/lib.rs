@@ -3017,6 +3017,42 @@ fn run_action<'a, P, C>(
                     window.raw.set_blur(blur);
                 }
             }
+            window::Action::RegisterSpecialAction(id, is_default) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.register_special_action(is_default);
+                    }
+                }
+            }
+            window::Action::UnregisterSpecialAction(id) => {
+                #[cfg(all(
+                    feature = "wayland",
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::wayland::WindowExtWayland;
+                    if let Some(window) = window_manager.get_mut(id) {
+                        let _ = window.raw.unregister_special_action();
+                    }
+                }
+            }
         },
         Action::System(action) => match action {
             system::Action::GetInformation(_channel) => {

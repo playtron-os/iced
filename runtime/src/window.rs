@@ -253,6 +253,13 @@ pub enum Action {
 
     /// Enable or disable blur behind the window at runtime.
     SetBlur(Id, bool),
+
+    /// Register the window to receive the device's special key.
+    /// Parameters are (window_id, is_default_receiver).
+    RegisterSpecialAction(Id, bool),
+
+    /// Stop receiving the device's special key.
+    UnregisterSpecialAction(Id),
 }
 
 /// A window managed by iced.
@@ -330,6 +337,35 @@ pub fn close_requests() -> Subscription<Id> {
             None
         }
     })
+}
+
+/// Registers the window to receive the device's special key.
+///
+/// The compositor resolves the gesture and delivers it as
+/// [`Event::SpecialAction`](crate::core::Event::SpecialAction): a tap asks the
+/// window to focus its input, a hold brackets push-to-talk.
+///
+/// When `is_default_receiver` the window also becomes the fallback, used
+/// whenever no registered surface is focused. Only one fallback exists at a
+/// time; registering a second replaces the first.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses the `zcosmic_special_action_v1` protocol.
+/// - **Other platforms:** No effect.
+pub fn register_special_action<T>(id: Id, is_default_receiver: bool) -> Task<T> {
+    task::effect(crate::Action::Window(Action::RegisterSpecialAction(
+        id,
+        is_default_receiver,
+    )))
+}
+
+/// Stops the window receiving the device's special key.
+///
+/// ## Platform-specific
+/// - **COSMIC/Wayland:** Uses the `zcosmic_special_action_v1` protocol.
+/// - **Other platforms:** No effect.
+pub fn unregister_special_action<T>(id: Id) -> Task<T> {
+    task::effect(crate::Action::Window(Action::UnregisterSpecialAction(id)))
 }
 
 /// Opens a new window with the given [`Settings`]; producing the [`Id`]
