@@ -208,7 +208,28 @@ pub trait Renderer {
     /// * `bounds` - The logical bounds of the content being scaled
     /// * `render_scale` - The scale at which to rasterize content in the offscreen texture
     /// * `display_scale` - The scale at which to composite the quad on screen
-    fn start_cached_scale(&mut self, _bounds: Rectangle, _render_scale: f32, _display_scale: f32) {}
+    fn start_cached_scale(&mut self, bounds: Rectangle, render_scale: f32, display_scale: f32) {
+        self.start_cached_scale_blurred(bounds, render_scale, display_scale, 0.0);
+    }
+
+    /// Starts a cached scale region that also blurs its own content.
+    ///
+    /// `blur_radius` is a CSS `filter: blur()` in logical pixels — it softens
+    /// the recorded content itself, and is a different effect from
+    /// [`draw_backdrop_blur`](Self::draw_backdrop_blur), which softens whatever
+    /// is drawn *behind* a region. A radius of `0.0` is exactly
+    /// [`start_cached_scale`](Self::start_cached_scale).
+    ///
+    /// Renderers that cannot blur content ignore the radius and still scale, so
+    /// a caller always gets the rest of the effect.
+    fn start_cached_scale_blurred(
+        &mut self,
+        _bounds: Rectangle,
+        _render_scale: f32,
+        _display_scale: f32,
+        _blur_radius: f32,
+    ) {
+    }
 
     /// Ends recording the current cached scale region.
     fn end_cached_scale(&mut self) {}
@@ -227,6 +248,24 @@ pub trait Renderer {
         f: impl FnOnce(&mut Self),
     ) {
         self.start_cached_scale(bounds, render_scale, display_scale);
+        f(self);
+        self.end_cached_scale();
+    }
+
+    /// Draws the primitives recorded in the given closure with GPU-cached
+    /// scaling and a content blur.
+    ///
+    /// See [`start_cached_scale_blurred`](Self::start_cached_scale_blurred) for
+    /// what `blur_radius` means and how it differs from a backdrop blur.
+    fn with_cached_scale_blurred(
+        &mut self,
+        bounds: Rectangle,
+        render_scale: f32,
+        display_scale: f32,
+        blur_radius: f32,
+        f: impl FnOnce(&mut Self),
+    ) {
+        self.start_cached_scale_blurred(bounds, render_scale, display_scale, blur_radius);
         f(self);
         self.end_cached_scale();
     }

@@ -101,6 +101,20 @@ where
         );
     }
 
+    fn start_cached_scale_blurred(
+        &mut self,
+        bounds: Rectangle,
+        render_scale: f32,
+        display_scale: f32,
+        blur_radius: f32,
+    ) {
+        delegate!(
+            self,
+            renderer,
+            renderer.start_cached_scale_blurred(bounds, render_scale, display_scale, blur_radius)
+        );
+    }
+
     fn end_cached_scale(&mut self) {
         delegate!(self, renderer, renderer.end_cached_scale());
     }

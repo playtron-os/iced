@@ -1789,13 +1789,25 @@ impl Renderer {
             let _ = ManuallyDrop::into_inner(render_pass);
         }
 
-        // Composite the offscreen texture back to the main target as a scaled quad
+        // Composite the offscreen texture back to the main target as a scaled
+        // quad, blurring it on the way if the region asked for one. The
+        // intermediate is only allocated when something actually blurs.
         {
+            if region.blur_radius > 0.0 {
+                let _ = self.cached_scale_state.get_or_create_blur_intermediate(
+                    &self.engine.device,
+                    self.engine.format,
+                    physical_size,
+                );
+            }
+
             let offscreen_view = self.cached_scale_state.texture_view().unwrap();
+            let intermediate = self.cached_scale_state.blur_intermediate_view();
             self.engine.cached_scale_pipeline.render(
                 &self.engine.device,
                 encoder,
                 offscreen_view,
+                intermediate,
                 target,
                 region,
                 viewport,
@@ -2154,7 +2166,13 @@ impl core::Renderer for Renderer {
         let _ = self.gradient_fade.end(layer_count);
     }
 
-    fn start_cached_scale(&mut self, bounds: Rectangle, render_scale: f32, display_scale: f32) {
+    fn start_cached_scale_blurred(
+        &mut self,
+        bounds: Rectangle,
+        render_scale: f32,
+        display_scale: f32,
+        blur_radius: f32,
+    ) {
         // Get the current transformation (e.g. scroll offset) BEFORE flushing
         // so we can transform bounds from content-space to screen-space.
         // The region must store screen-space bounds for correct offscreen
@@ -2184,6 +2202,7 @@ impl core::Renderer for Renderer {
             screen_expanded,
             render_scale,
             display_scale,
+            blur_radius,
             layer_count,
         );
         // Push a dedicated clip layer so content gets its own layer slot

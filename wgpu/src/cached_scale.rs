@@ -33,7 +33,26 @@ pub struct CachedScaleRegion {
     pub start_layer: usize,
     /// The ending layer index (exclusive)
     pub end_layer: usize,
+    /// Content-blur radius in logical pixels; 0.0 for no blur.
+    ///
+    /// This is a CSS `filter: blur()` — it softens the captured content
+    /// itself. The backdrop blur in `blur.rs` is the other thing entirely.
+    pub blur_radius: f32,
 }
+
+/// Sampling stops this many standard deviations out.
+///
+/// A Gaussian is past 99.7% of its mass by 3σ, so tails beyond this are
+/// invisible; the kernel is renormalised by its own sum, which absorbs the
+/// truncation exactly.
+const BLUR_SIGMA_CUTOFF: f32 = 3.0;
+
+/// Ceiling on taps per side, per pass.
+///
+/// Purely a guard against a pathological radius turning one frame into a
+/// several-thousand-tap loop; real radii are single-digit logical pixels and
+/// land far below it.
+const MAX_BLUR_TAPS: f32 = 48.0;
 
 /// Uniform data for the cached scale shader.
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -43,12 +62,20 @@ struct CachedScaleUniforms {
     src_rect: [f32; 4],
     /// Destination quad in NDC (x, y, width, height)
     dst_rect: [f32; 4],
+    /// (step_u, step_v, sigma_texels, taps_per_side)
+    blur: [f32; 4],
 }
 
 /// Pipeline for compositing a cached scale layer.
 #[derive(Debug, Clone)]
 pub struct Pipeline {
     pipeline: wgpu::RenderPipeline,
+    /// The horizontal blur pass.
+    ///
+    /// Identical to `pipeline` but writing with `REPLACE` — it renders into a
+    /// freshly cleared intermediate, so blending against it would mix the
+    /// pass with garbage rather than compositing onto a scene.
+    blur_pass: wgpu::RenderPipeline,
     constant_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -142,8 +169,39 @@ impl Pipeline {
             cache: None,
         });
 
+        let blur_pass = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("iced_wgpu.cached_scale.blur_pass_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Cw,
+                ..wgpu::PrimitiveState::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         Self {
             pipeline,
+            blur_pass,
             constant_layout,
             texture_layout,
             sampler,
@@ -159,6 +217,7 @@ impl Pipeline {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_texture: &wgpu::TextureView,
+        intermediate_texture: Option<&wgpu::TextureView>,
         target: &wgpu::TextureView,
         region: &CachedScaleRegion,
         viewport: &Viewport,
@@ -172,8 +231,20 @@ impl Pipeline {
         // When display_scale < render_scale, we downscale (always looks good).
         let effective_scale = region.display_scale / region.render_scale;
 
+        // A blur pulls colour outward past the content's edges, so the region
+        // sampled and composited has to grow with it or the softened halo is
+        // sliced off square — which reads as a hard edge on an otherwise soft
+        // element. The offscreen texture is transparent out there, so the extra
+        // area composites to nothing when there is no blur to catch.
+        let sigma = region.blur_radius * sf;
+        let blur_padding = if sigma > 0.0 {
+            sigma * BLUR_SIGMA_CUTOFF
+        } else {
+            0.0
+        };
+
         // Use clip_bounds (expanded) for sampling the full area including shadows
-        let phys_clip = region.clip_bounds * sf;
+        let phys_clip = (region.clip_bounds * sf).expand(blur_padding);
         // Original content bounds for centering
         let phys_bounds = region.bounds * sf;
 
@@ -200,14 +271,86 @@ impl Pipeline {
         let ndc_w = (dst_w / physical_size.width as f32) * 2.0;
         let ndc_h = -(dst_h / physical_size.height as f32) * 2.0; // negative for Y-down
 
+        let taps = if sigma > 0.0 {
+            (sigma * BLUR_SIGMA_CUTOFF).ceil().min(MAX_BLUR_TAPS)
+        } else {
+            0.0
+        };
+        let blurring = taps > 0.0;
+
+        // The horizontal half of the separable Gaussian, into the
+        // intermediate; the vertical half rides along with the composite
+        // below. Without an intermediate to land in there is nowhere to put
+        // the first pass, so the blur is skipped rather than half-applied.
+        let source_texture = match (blurring, intermediate_texture) {
+            (true, Some(intermediate)) => {
+                self.draw(
+                    device,
+                    encoder,
+                    source_texture,
+                    intermediate,
+                    &CachedScaleUniforms {
+                        src_rect,
+                        // 1:1 into the intermediate — only the second pass
+                        // applies the scale transform.
+                        dst_rect: [
+                            (phys_clip.x / physical_size.width as f32) * 2.0 - 1.0,
+                            1.0 - (phys_clip.y / physical_size.height as f32) * 2.0,
+                            (phys_clip.width / physical_size.width as f32) * 2.0,
+                            -(phys_clip.height / physical_size.height as f32) * 2.0,
+                        ],
+                        blur: [1.0 / physical_size.width as f32, 0.0, sigma, taps],
+                    },
+                    &self.blur_pass,
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    "iced_wgpu.cached_scale.blur_h_pass",
+                );
+                intermediate
+            }
+            _ => source_texture,
+        };
+
         let uniforms = CachedScaleUniforms {
             src_rect,
             dst_rect: [ndc_x, ndc_y, ndc_w, ndc_h],
+            blur: if blurring && intermediate_texture.is_some() {
+                [0.0, 1.0 / physical_size.height as f32, sigma, taps]
+            } else {
+                [0.0, 0.0, 0.0, 0.0]
+            },
         };
 
+        self.draw(
+            device,
+            encoder,
+            source_texture,
+            target,
+            &uniforms,
+            &self.pipeline,
+            wgpu::LoadOp::Load,
+            "iced_wgpu.cached_scale.render_pass",
+        );
+    }
+
+    /// One full-quad pass: bind the uniforms and the source, draw the quad.
+    ///
+    /// Shared by the composite and the horizontal blur pass, which differ only
+    /// in pipeline, target and load op.
+    #[allow(clippy::too_many_arguments)]
+    fn draw(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source_texture: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        uniforms: &CachedScaleUniforms,
+        pipeline: &wgpu::RenderPipeline,
+        load: wgpu::LoadOp<wgpu::Color>,
+        label: &str,
+    ) {
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("iced_wgpu.cached_scale.uniform_buffer"),
-            contents: bytemuck::bytes_of(&uniforms),
+            contents: bytemuck::bytes_of(uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
@@ -236,13 +379,13 @@ impl Pipeline {
         });
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("iced_wgpu.cached_scale.render_pass"),
+            label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -252,7 +395,7 @@ impl Pipeline {
             multiview_mask: None,
         });
 
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &constant_bind_group, &[]);
         pass.set_bind_group(1, &texture_bind_group, &[]);
         pass.draw(0..6, 0..1);
@@ -268,6 +411,11 @@ pub struct State {
     active: Option<ActiveCachedScale>,
     /// Offscreen texture for rendering content
     offscreen_texture: Option<OffscreenTexture>,
+    /// Scratch target for the horizontal half of a content blur.
+    ///
+    /// Only allocated once something actually asks for a blur — most frames
+    /// never do, and this is a full-screen texture.
+    blur_intermediate: Option<OffscreenTexture>,
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +425,7 @@ struct ActiveCachedScale {
     render_scale: f32,
     display_scale: f32,
     start_layer: usize,
+    blur_radius: f32,
 }
 
 #[derive(Debug)]
@@ -287,12 +436,45 @@ struct OffscreenTexture {
     size: Size<u32>,
 }
 
+impl OffscreenTexture {
+    fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        size: Size<u32>,
+        label: &str,
+    ) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        Self {
+            texture,
+            view,
+            size,
+        }
+    }
+}
+
 impl State {
     pub fn new() -> Self {
         Self {
             completed_regions: Vec::new(),
             active: None,
             offscreen_texture: None,
+            blur_intermediate: None,
         }
     }
 
@@ -303,6 +485,7 @@ impl State {
         clip_bounds: Rectangle,
         render_scale: f32,
         display_scale: f32,
+        blur_radius: f32,
         current_layer_count: usize,
     ) {
         self.active = Some(ActiveCachedScale {
@@ -311,6 +494,7 @@ impl State {
             render_scale,
             display_scale,
             start_layer: current_layer_count,
+            blur_radius,
         });
     }
 
@@ -329,6 +513,7 @@ impl State {
                 display_scale: active.display_scale,
                 start_layer: active.start_layer,
                 end_layer: current_layer_count,
+                blur_radius: active.blur_radius,
             };
             self.completed_regions.push(region.clone());
             Some(region)
@@ -369,29 +554,12 @@ impl State {
             .unwrap_or(true);
 
         if needs_recreate {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("iced_wgpu.cached_scale.offscreen_texture"),
-                size: wgpu::Extent3d {
-                    width: size.width,
-                    height: size.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
+            self.offscreen_texture = Some(OffscreenTexture::new(
+                device,
                 format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            self.offscreen_texture = Some(OffscreenTexture {
-                texture,
-                view,
                 size,
-            });
+                "iced_wgpu.cached_scale.offscreen_texture",
+            ));
         }
 
         &self.offscreen_texture.as_ref().unwrap().view
@@ -401,10 +569,68 @@ impl State {
     pub fn texture_view(&self) -> Option<&wgpu::TextureView> {
         self.offscreen_texture.as_ref().map(|t| &t.view)
     }
+
+    /// Gets or creates the scratch texture the horizontal blur pass lands in.
+    pub fn get_or_create_blur_intermediate(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        size: Size<u32>,
+    ) -> &wgpu::TextureView {
+        if self
+            .blur_intermediate
+            .as_ref()
+            .is_none_or(|t| t.size != size)
+        {
+            self.blur_intermediate = Some(OffscreenTexture::new(
+                device,
+                format,
+                size,
+                "iced_wgpu.cached_scale.blur_intermediate",
+            ));
+        }
+
+        &self.blur_intermediate.as_ref().unwrap().view
+    }
+
+    /// Returns the blur intermediate texture view if one has been created.
+    pub fn blur_intermediate_view(&self) -> Option<&wgpu::TextureView> {
+        self.blur_intermediate.as_ref().map(|t| &t.view)
+    }
+
+    /// Whether any completed region this frame asks for a content blur.
+    pub fn has_blur(&self) -> bool {
+        self.completed_regions.iter().any(|r| r.blur_radius > 0.0)
+    }
 }
 
 impl Default for State {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The shader is compiled by the driver at first paint, so a WGSL mistake
+    /// would surface as content that silently stops drawing rather than as a
+    /// build failure. Running it through the same naga that will compile it for
+    /// real catches that here instead.
+    #[test]
+    fn shader_parses_and_validates() {
+        use wgpu::naga::{front::wgsl, valid};
+
+        let source = include_str!("shader/cached_scale.wgsl");
+
+        let module = wgsl::parse_str(source).unwrap_or_else(|err| {
+            panic!(
+                "cached_scale.wgsl does not parse:\n{}",
+                err.emit_to_string(source)
+            )
+        });
+
+        let _ = valid::Validator::new(valid::ValidationFlags::all(), valid::Capabilities::empty())
+            .validate(&module)
+            .unwrap_or_else(|err| panic!("cached_scale.wgsl does not validate: {err:?}"));
     }
 }
