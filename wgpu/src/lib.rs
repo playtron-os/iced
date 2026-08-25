@@ -1319,10 +1319,11 @@ impl Renderer {
             }
 
             log::trace!(
-                "Rendering post-blur layer {}: has_quads={}, has_triangles={}, has_text={}",
+                "Rendering post-blur layer {}: has_quads={}, has_triangles={}, has_primitives={}, has_text={}",
                 layer_index,
                 !layer.quads.is_empty(),
                 !layer.triangles.is_empty(),
+                !layer.primitives.is_empty(),
                 !layer.text.is_empty()
             );
 
@@ -1390,6 +1391,104 @@ impl Renderer {
                         multiview_mask: None,
                     },
                 ));
+            }
+
+            // Custom shader primitives are prepared with the rest of the
+            // layer, but the post-blur replay used to omit them entirely. A
+            // shader-backed child (for example the voice orb) was therefore
+            // skipped in the main pass as intended and never drawn again.
+            // Mirror the normal render path here so every primitive held back
+            // for backdrop blur is actually composited above it.
+            if !layer.primitives.is_empty() {
+                let render_span = debug::render(debug::Primitive::Shader);
+
+                let primitive_storage = self
+                    .engine
+                    .primitive_storage
+                    .read()
+                    .expect("Read primitive storage");
+
+                let mut need_render = Vec::new();
+
+                for instance in &layer.primitives {
+                    let bounds = instance.bounds * scale;
+
+                    if let Some(clip_bounds) = (instance.bounds * scale)
+                        .intersection(&physical_bounds)
+                        .and_then(Rectangle::snap)
+                    {
+                        render_pass.set_viewport(
+                            bounds.x,
+                            bounds.y,
+                            bounds.width,
+                            bounds.height,
+                            0.0,
+                            1.0,
+                        );
+
+                        render_pass.set_scissor_rect(
+                            clip_bounds.x,
+                            clip_bounds.y,
+                            clip_bounds.width,
+                            clip_bounds.height,
+                        );
+
+                        let drawn = instance
+                            .primitive
+                            .draw(&primitive_storage, &mut render_pass);
+
+                        if !drawn {
+                            need_render.push((instance, clip_bounds));
+                        }
+                    }
+                }
+
+                render_pass.set_viewport(
+                    0.0,
+                    0.0,
+                    viewport.physical_width() as f32,
+                    viewport.physical_height() as f32,
+                    0.0,
+                    1.0,
+                );
+
+                render_pass.set_scissor_rect(
+                    0,
+                    0,
+                    viewport.physical_width(),
+                    viewport.physical_height(),
+                );
+
+                if !need_render.is_empty() {
+                    let _ = std::mem::ManuallyDrop::into_inner(render_pass);
+
+                    for (instance, clip_bounds) in need_render {
+                        instance
+                            .primitive
+                            .render(&primitive_storage, encoder, frame, &clip_bounds);
+                    }
+
+                    render_pass = std::mem::ManuallyDrop::new(encoder.begin_render_pass(
+                        &wgpu::RenderPassDescriptor {
+                            label: Some("iced_wgpu post-blur render pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: frame,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        },
+                    ));
+                }
+
+                render_span.finish();
             }
 
             if !layer.text.is_empty() {
@@ -2291,6 +2390,27 @@ impl core::Renderer for Renderer {
         fade_start: f32,
         saturation: f32,
     ) {
+        self.draw_backdrop_blur_with_fade(
+            bounds,
+            radius,
+            border_radius,
+            0,
+            fade_start,
+            1.0,
+            saturation,
+        );
+    }
+
+    fn draw_backdrop_blur_with_fade(
+        &mut self,
+        bounds: Rectangle,
+        radius: f32,
+        border_radius: [f32; 4],
+        fade_direction: u8,
+        fade_start: f32,
+        fade_end: f32,
+        saturation: f32,
+    ) {
         // Every other draw path scales itself by the opacity stack at record
         // time; this one records a region the blur pipeline replays later, so
         // it has to read the stack itself. Without this the frosted patch pops
@@ -2325,11 +2445,13 @@ impl core::Renderer for Renderer {
         let layer_count = self.layers.active_count();
 
         // Record this blur region with the current layer index (using screen-space bounds)
-        let blur = blur::BackdropBlur::with_border_radius(
+        let blur = blur::BackdropBlur::with_border_radius_and_fade(
             screen_bounds,
             radius,
             border_radius,
+            fade_direction,
             fade_start,
+            fade_end,
             saturation,
         )
         .with_alpha(opacity);

@@ -20,10 +20,12 @@ pub struct BackdropBlur {
     pub radius: f32,
     /// Border radius [top_left, top_right, bottom_right, bottom_left] in logical pixels
     pub border_radius: [f32; 4],
-    /// Vertical fade start as fraction (0.0–1.0) of bounds height.
-    /// Full blur above this point, linearly fading to 0 at the bottom.
-    /// 0.0 = fade across entire height, 1.0 = no fade (default).
+    /// Fade direction, matching the gradient-fade renderer (0–5).
+    pub fade_direction: u8,
+    /// Fade stops as fractions (0.0–1.0) of the relevant dimension.
+    /// Equal or reversed stops disable the fade.
     pub fade_start: f32,
+    pub fade_end: f32,
     /// CSS `saturate()` amount applied to the blurred backdrop.
     /// 1.0 = unchanged (default), 0.0 = greyscale, above 1.0 = more saturated.
     /// Negative amounts are not legal in CSS and are clamped to 0.
@@ -52,7 +54,9 @@ impl BackdropBlur {
             bounds,
             radius: radius.max(0.0),
             border_radius: [0.0; 4],
+            fade_direction: 0,
             fade_start: 1.0,
+            fade_end: 1.0,
             saturation: 1.0,
             alpha: 1.0,
         }
@@ -66,11 +70,34 @@ impl BackdropBlur {
         fade_start: f32,
         saturation: f32,
     ) -> Self {
+        Self::with_border_radius_and_fade(
+            bounds,
+            radius,
+            border_radius,
+            0,
+            fade_start,
+            1.0,
+            saturation,
+        )
+    }
+
+    /// Creates a backdrop blur with border radii and a directional fade.
+    pub fn with_border_radius_and_fade(
+        bounds: Rectangle,
+        radius: f32,
+        border_radius: [f32; 4],
+        fade_direction: u8,
+        fade_start: f32,
+        fade_end: f32,
+        saturation: f32,
+    ) -> Self {
         Self {
             bounds,
             radius: radius.max(0.0),
             border_radius,
+            fade_direction: fade_direction.min(5),
             fade_start: fade_start.clamp(0.0, 1.0),
+            fade_end: fade_end.clamp(0.0, 1.0),
             saturation: saturation.max(0.0),
             alpha: 1.0,
         }
@@ -97,16 +124,17 @@ struct BlurUniforms {
     params: [f32; 4],
     /// Border radius [top_left, top_right, bottom_right, bottom_left] in pixels
     border_radius: [f32; 4],
-    /// fade_params.x = fade_start (0.0–1.0 fraction of bounds height)
+    /// fade_params.x = fade_start (0.0–1.0 fraction of the relevant dimension)
     /// fade_params.y = 1.0 on the restore pass (emit the complementary weight)
     /// fade_params.z = region alpha (1.0 = full strength). Must be 1.0 on any
     ///                 pass that is not part of the erase/restore/blur crossfade,
     ///                 or that pass renders nothing.
-    /// fade_params.w = reserved
+    /// fade_params.w = fade_end
     fade_params: [f32; 4],
     /// filter_params.x = CSS `saturate()` amount (1.0 = identity)
     /// filter_params.y = 1.0 when the render target format is `*Srgb`
-    /// filter_params.z/w = reserved
+    /// filter_params.z = fade direction, matching the gradient-fade renderer (0–5)
+    /// filter_params.w = reserved
     ///
     /// A whole `vec4` rather than a bare `f32`: WGSL rounds a uniform struct up
     /// to a 16-byte multiple, so a lone trailing scalar would make the Rust size
@@ -135,10 +163,10 @@ struct PassGeometry {
 ///
 /// The erase pass always clears the whole region, and only the final pass puts
 /// anything back. Any time that final pass writes at less than full weight —
-/// a vertical fade, a partial alpha, or both — the difference has to be made up
+/// a directional fade, a partial alpha, or both — the difference has to be made up
 /// by additively restoring the original scene, or the region is a hole.
-fn restores(fade: f32, alpha: f32) -> bool {
-    fade < 1.0 || alpha < 1.0
+fn restores(fade_start: f32, fade_end: f32, alpha: f32) -> bool {
+    fade_start < fade_end || alpha < 1.0
 }
 
 /// Builds every uniform block for one blur region, in execution order.
@@ -150,7 +178,9 @@ fn restores(fade: f32, alpha: f32) -> bool {
 /// compound to its sixth power, and that is a silent, plausible-looking bug.
 fn build_uniforms(
     geo: &PassGeometry,
-    fade: f32,
+    fade_direction: u8,
+    fade_start: f32,
+    fade_end: f32,
     alpha: f32,
     saturation: f32,
     srgb: f32,
@@ -166,7 +196,7 @@ fn build_uniforms(
 
     // Saturation rides on the final pass alone, so identity is what every other
     // block carries.
-    let identity = [1.0, srgb, 0.0, 0.0];
+    let identity = [1.0, srgb, f32::from(fade_direction), 0.0];
 
     let mut all = Vec::with_capacity(8);
 
@@ -181,7 +211,7 @@ fn build_uniforms(
     });
 
     // Pass 1: Restore.
-    if restores(fade, alpha) {
+    if restores(fade_start, fade_end, alpha) {
         all.push(BlurUniforms {
             quad_bounds: clip_bounds,
             clip_bounds,
@@ -190,7 +220,7 @@ fn build_uniforms(
             // Carries the unfiltered original, so it stays at identity
             // saturation: saturating it would put saturated-but-unblurred
             // pixels in the fade region and seam against the scene outside.
-            fade_params: [fade, 1.0, alpha, 0.0], // invert_fade
+            fade_params: [fade_start, 1.0, alpha, fade_end], // invert_fade
             filter_params: identity,
         });
     }
@@ -215,8 +245,8 @@ fn build_uniforms(
         clip_bounds,
         params: [total_radius, 1.0, tex_width, tex_height],
         border_radius,
-        fade_params: [fade, 0.0, alpha, 0.0],
-        filter_params: [saturation, srgb, 0.0, 0.0],
+        fade_params: [fade_start, 0.0, alpha, fade_end],
+        filter_params: [saturation, srgb, f32::from(fade_direction), 0.0],
     });
 
     all
@@ -654,12 +684,14 @@ impl Pipeline {
         //   2-6. Blur passes: ping-pong source ↔ intermediate
         //   7. Final V blur intermediate → target additively with weight*sdf
         //
-        // `weight` is the vertical fade scaled by the region's alpha, so the
-        // same crossfade that handles `fade_start` also handles a region inside
+        // `weight` is the directional fade scaled by the region's alpha, so
+        // the same crossfade that handles the stops also handles a region inside
         // a `with_opacity` group: at alpha 0 the restore pass puts back exactly
         // what the erase took away and the region is a pixel-exact no-op.
 
-        let fade = blur.fade_start;
+        let fade_direction = blur.fade_direction;
+        let fade_start = blur.fade_start;
+        let fade_end = blur.fade_end;
         let alpha = blur.alpha.clamp(0.0, 1.0);
         let saturation = blur.saturation.max(0.0);
 
@@ -676,12 +708,14 @@ impl Pipeline {
                 tex_height,
                 total_radius,
             },
-            fade,
+            fade_direction,
+            fade_start,
+            fade_end,
             alpha,
             saturation,
             self.srgb_flag(),
         );
-        let has_restore = restores(fade, alpha);
+        let has_restore = restores(fade_start, fade_end, alpha);
 
         let (constant_bg, stride) = self.create_packed_uniforms(device, &all_uniforms);
 
@@ -1196,7 +1230,7 @@ mod tests {
         // The property the whole design rests on. The five ping-pong passes
         // feed each other, so an amount leaking into them compounds: 1.8 would
         // arrive as 1.8^6 ≈ 34. Every block but the last must be exactly 1.0.
-        let uniforms = build_uniforms(&geometry(), 1.0, 1.0, 1.8, 0.0);
+        let uniforms = build_uniforms(&geometry(), 0, 1.0, 1.0, 1.0, 1.8, 0.0);
 
         let (last, rest) = uniforms.split_last().expect("at least one pass");
 
@@ -1216,7 +1250,7 @@ mod tests {
     fn an_untouched_saturation_leaves_every_pass_at_identity() {
         // The compatibility guarantee: with saturation defaulted, the uniform
         // stream is what it always was, so the frame is unchanged.
-        let uniforms = build_uniforms(&geometry(), 1.0, 1.0, 1.0, 0.0);
+        let uniforms = build_uniforms(&geometry(), 0, 1.0, 1.0, 1.0, 1.0, 0.0);
 
         assert!(
             uniforms
@@ -1230,7 +1264,7 @@ mod tests {
     fn the_srgb_flag_reaches_every_pass() {
         // Whichever pass ends up filtering, it has to know which space it is
         // working in — so the flag is not something only the last block gets.
-        let uniforms = build_uniforms(&geometry(), 1.0, 1.0, 1.0, 1.0);
+        let uniforms = build_uniforms(&geometry(), 0, 1.0, 1.0, 1.0, 1.0, 1.0);
 
         assert!(
             uniforms
@@ -1242,18 +1276,24 @@ mod tests {
     #[test]
     fn a_fully_faded_region_still_restores_what_the_erase_took() {
         // Without the alpha term in `restores`, a region at partial opacity
-        // with no vertical fade would erase itself and put nothing back — a
+        // with no directional fade would erase itself and put nothing back — a
         // transparent hole punched in the window, which is much worse than the
         // popping this fixes.
-        assert!(restores(1.0, 0.5), "a partial alpha needs the restore pass");
-        assert!(restores(0.5, 1.0), "a vertical fade needs the restore pass");
         assert!(
-            !restores(1.0, 1.0),
+            restores(1.0, 1.0, 0.5),
+            "a partial alpha needs the restore pass"
+        );
+        assert!(
+            restores(0.5, 1.0, 1.0),
+            "a directional fade needs the restore pass"
+        );
+        assert!(
+            !restores(1.0, 1.0, 1.0),
             "a full-strength region covers its own erase"
         );
 
-        let faded = build_uniforms(&geometry(), 1.0, 0.5, 1.0, 0.0);
-        let full = build_uniforms(&geometry(), 1.0, 1.0, 1.0, 0.0);
+        let faded = build_uniforms(&geometry(), 0, 1.0, 1.0, 0.5, 1.0, 0.0);
+        let full = build_uniforms(&geometry(), 0, 1.0, 1.0, 1.0, 1.0, 0.0);
         assert_eq!(faded.len(), full.len() + 1);
     }
 
@@ -1261,7 +1301,7 @@ mod tests {
     fn the_region_alpha_rides_on_the_crossfade_pair_only() {
         // The erase and the ping-pong passes are not part of the crossfade;
         // they must stay at full weight or they render nothing at all.
-        let uniforms = build_uniforms(&geometry(), 1.0, 0.25, 1.0, 0.0);
+        let uniforms = build_uniforms(&geometry(), 0, 1.0, 1.0, 0.25, 1.0, 0.0);
 
         let restore = &uniforms[1];
         let final_pass = uniforms.last().expect("at least one pass");
@@ -1283,9 +1323,25 @@ mod tests {
     }
 
     #[test]
+    fn directional_fade_parameters_reach_the_crossfade_pair() {
+        let uniforms = build_uniforms(&geometry(), 1, 0.0, 0.68, 1.0, 1.0, 0.0);
+        let restore = &uniforms[1];
+        let final_pass = uniforms.last().expect("at least one pass");
+
+        for pass in [restore, final_pass] {
+            assert!((pass.fade_params[0] - 0.0).abs() < f32::EPSILON);
+            assert!((pass.fade_params[3] - 0.68).abs() < f32::EPSILON);
+            assert!((pass.filter_params[2] - 1.0).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
     fn out_of_range_inputs_are_brought_into_range() {
-        let blur = BackdropBlur::with_border_radius(bounds(), 10.0, [0.0; 4], 2.0, -1.0);
+        let blur =
+            BackdropBlur::with_border_radius_and_fade(bounds(), 10.0, [0.0; 4], 9, 2.0, -1.0, -1.0);
+        assert_eq!(blur.fade_direction, 5);
         assert!((blur.fade_start - 1.0).abs() < f32::EPSILON);
+        assert!(blur.fade_end.abs() < f32::EPSILON);
         assert!(
             blur.saturation.abs() < f32::EPSILON,
             "CSS has no negative saturation"

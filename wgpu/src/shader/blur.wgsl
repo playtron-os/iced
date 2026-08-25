@@ -8,16 +8,17 @@ struct Uniforms {
     params: vec4<f32>,
     // border_radius = (top_left, top_right, bottom_right, bottom_left) in pixels
     border_radius: vec4<f32>,
-    // fade_params.x = fade_start (0.0–1.0 fraction of bounds height)
+    // fade_params.x = fade_start (0.0–1.0 fraction of the relevant dimension)
     // fade_params.y = 1.0 on the restore pass (emit the complementary weight)
     // fade_params.z = region alpha (1.0 = full strength). Must be 1.0 on any
     //                 pass outside the erase/restore/blur crossfade, or that
     //                 pass renders nothing.
-    // fade_params.w = reserved
+    // fade_params.w = fade_end
     fade_params: vec4<f32>,
     // filter_params.x = CSS saturate() amount (1.0 = identity)
     // filter_params.y = 1.0 when the render target format is *Srgb
-    // filter_params.z/w = reserved
+    // filter_params.z = fade direction (same 0–5 values as gradient_fade.wgsl)
+    // filter_params.w = reserved
     filter_params: vec4<f32>,
 }
 
@@ -204,15 +205,42 @@ fn fs_main(
     // output is what it always was, and at alpha 0 the region is a pixel-exact
     // no-op rather than a hole.
     //
-    // The inversion sits outside the fade_start guard on purpose — the restore
+    // The inversion sits outside the fade guard on purpose — the restore
     // pass has to work when the only thing being faded is the region alpha.
     var weight = 1.0;
     let fade_start = u_uniforms.fade_params.x;
-    if (fade_start < 1.0) {
+    let fade_end = u_uniforms.fade_params.w;
+    if (fade_start < fade_end) {
+        let bounds_left_px = u_uniforms.clip_bounds.x * tex_width;
         let bounds_top_px = u_uniforms.clip_bounds.y * tex_height;
+        let bounds_width_px = u_uniforms.clip_bounds.z * tex_width;
         let bounds_height_px = u_uniforms.clip_bounds.w * tex_height;
+        let local_x = (frag_pos.x - bounds_left_px) / bounds_width_px;
         let local_y = (frag_pos.y - bounds_top_px) / bounds_height_px;
-        weight = 1.0 - smoothstep(fade_start, 1.0, local_y);
+        let fade_direction = u32(u_uniforms.filter_params.z);
+
+        if (fade_direction == 4u) {
+            // Match GradientFade::Vertical: transparent at both edges and
+            // fully applied `fade_end` of the height inward.
+            let top_weight = clamp(local_y / fade_end, 0.0, 1.0);
+            let bottom_weight = clamp((1.0 - local_y) / fade_end, 0.0, 1.0);
+            weight = min(top_weight, bottom_weight);
+        } else if (fade_direction == 5u) {
+            // Match GradientFade::Horizontal.
+            let left_weight = clamp(local_x / fade_end, 0.0, 1.0);
+            let right_weight = clamp((1.0 - local_x) / fade_end, 0.0, 1.0);
+            weight = min(left_weight, right_weight);
+        } else {
+            let position = select(local_y, local_x, fade_direction >= 2u);
+            let progress = clamp(
+                (position - fade_start) / (fade_end - fade_start),
+                0.0,
+                1.0,
+            );
+
+            // Top and Left fade in; Bottom and Right fade out.
+            weight = select(1.0 - progress, progress, fade_direction == 1u || fade_direction == 3u);
+        }
     }
     weight = weight * u_uniforms.fade_params.z;
     if (u_uniforms.fade_params.y > 0.5) {

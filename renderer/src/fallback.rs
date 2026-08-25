@@ -146,6 +146,31 @@ where
         );
     }
 
+    fn draw_backdrop_blur_with_fade(
+        &mut self,
+        bounds: Rectangle,
+        radius: f32,
+        border_radius: [f32; 4],
+        fade_direction: u8,
+        fade_start: f32,
+        fade_end: f32,
+        saturation: f32,
+    ) {
+        delegate!(
+            self,
+            renderer,
+            renderer.draw_backdrop_blur_with_fade(
+                bounds,
+                radius,
+                border_radius,
+                fade_direction,
+                fade_start,
+                fade_end,
+                saturation
+            )
+        );
+    }
+
     fn has_post_blur_content(&self) -> bool {
         delegate!(self, renderer, renderer.has_post_blur_content())
     }

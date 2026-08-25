@@ -30,6 +30,8 @@ use crate::core::widget::Operation;
 use crate::core::widget::tree::{self, Tree};
 use crate::core::{Element, Event, Length, Rectangle, Shell, Size, Vector, Widget};
 
+use super::gradient_fade::FadeEdge;
+
 /// A widget that applies a backdrop blur effect to content behind it.
 ///
 /// The blur effect is applied to whatever was rendered before this widget,
@@ -53,10 +55,12 @@ pub struct BackdropBlur<'a, Message, Theme = crate::Theme, Renderer = crate::Ren
     blur_radius: f32,
     /// Border radius [top_left, top_right, bottom_right, bottom_left] in logical pixels
     border_radius: [f32; 4],
-    /// Vertical fade start as fraction (0.0–1.0) of bounds height.
-    /// Full blur above this point, linearly fading to 0 at the bottom.
-    /// 1.0 = no fade (default).
+    /// Edge where the backdrop filter fades.
+    fade_edge: FadeEdge,
+    /// Fade stops as fractions (0.0–1.0) of the relevant dimension.
+    /// Equal stops disable the fade (the default).
     fade_start: f32,
+    fade_end: f32,
     /// CSS `saturate()` amount applied to the blurred backdrop.
     /// 1.0 = unchanged (default).
     saturation: f32,
@@ -73,7 +77,9 @@ impl<'a, Message, Theme, Renderer> BackdropBlur<'a, Message, Theme, Renderer> {
             content: content.into(),
             blur_radius: 10.0,
             border_radius: [0.0; 4],
+            fade_edge: FadeEdge::Bottom,
             fade_start: 1.0,
+            fade_end: 1.0,
             saturation: 1.0,
             width: Length::Shrink,
             height: Length::Shrink,
@@ -125,15 +131,38 @@ impl<'a, Message, Theme, Renderer> BackdropBlur<'a, Message, Theme, Renderer> {
         self
     }
 
-    /// Sets the vertical fade start point.
+    /// Sets which edge(s) the backdrop filter fades at.
     ///
-    /// The blur is at full intensity from the top to this fraction of the height,
-    /// then linearly fades to 0 at the bottom.
-    /// - `1.0` = no fade (default)
-    /// - `0.5` = full blur in top half, fading in bottom half
-    /// - `0.0` = fading across entire height
+    /// Direction and stop semantics match [`super::GradientFade`].
+    pub fn edge(mut self, edge: FadeEdge) -> Self {
+        self.fade_edge = edge;
+        self
+    }
+
+    /// Sets the backdrop filter fade start point.
+    ///
+    /// Positions are fractions of the relevant dimension, from top or left.
+    /// For the default [`FadeEdge::Bottom`], the filter is fully applied before
+    /// this point and begins fading out here. For [`FadeEdge::Top`], it begins
+    /// fading in here.
     pub fn fade_start(mut self, start: f32) -> Self {
         self.fade_start = start.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Sets the backdrop filter fade end point.
+    ///
+    /// For [`FadeEdge::Bottom`], the filter is transparent after this point.
+    /// For [`FadeEdge::Top`], it is fully applied after this point.
+    pub fn fade_end(mut self, end: f32) -> Self {
+        self.fade_end = end.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Sets both backdrop filter fade stops.
+    pub fn stops(mut self, start: f32, end: f32) -> Self {
+        self.fade_start = start.clamp(0.0, 1.0);
+        self.fade_end = end.clamp(0.0, 1.0);
         self
     }
 }
@@ -260,11 +289,20 @@ where
         if filters {
             // Draw the backdrop blur effect at this location
             // This blurs whatever was rendered before this widget
-            renderer.draw_backdrop_blur(
+            renderer.draw_backdrop_blur_with_fade(
                 bounds,
                 self.blur_radius,
                 self.border_radius,
+                match self.fade_edge {
+                    FadeEdge::Bottom => 0,
+                    FadeEdge::Top => 1,
+                    FadeEdge::Right => 2,
+                    FadeEdge::Left => 3,
+                    FadeEdge::Vertical => 4,
+                    FadeEdge::Horizontal => 5,
+                },
                 self.fade_start,
+                self.fade_end,
                 self.saturation,
             );
 

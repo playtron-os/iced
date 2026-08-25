@@ -165,6 +165,36 @@ pub trait Renderer {
     ) {
     }
 
+    /// Draws a backdrop blur with a directional gradient fade.
+    ///
+    /// Direction and stop semantics match [`with_gradient_fade`](Self::with_gradient_fade).
+    /// Renderers that do not implement directional backdrop fades fall back to
+    /// the original bottom-edge fade when possible, or an unfaded blur.
+    fn draw_backdrop_blur_with_fade(
+        &mut self,
+        bounds: Rectangle,
+        radius: f32,
+        border_radius: [f32; 4],
+        fade_direction: u8,
+        fade_start: f32,
+        fade_end: f32,
+        saturation: f32,
+    ) {
+        let compatible_fade_start = if fade_direction == 0 && fade_end >= 1.0 {
+            fade_start
+        } else {
+            1.0
+        };
+
+        self.draw_backdrop_blur(
+            bounds,
+            radius,
+            border_radius,
+            compatible_fade_start,
+            saturation,
+        );
+    }
+
     /// Begins recording content that should be rendered AFTER backdrop blur effects.
     ///
     /// Content drawn between `start_post_blur_layer` and `end_post_blur_layer` will be
