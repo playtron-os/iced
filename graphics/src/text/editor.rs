@@ -81,6 +81,22 @@ impl Editor {
     }
 }
 
+/// The largest valid vertical scroll offset for `buffer`, in buffer pixels.
+///
+/// `None` when some line has no cached layout: the content height would then be
+/// a guess, and clamping against a guess can hide text that is really there.
+fn max_scroll(buffer: &cosmic_text::Buffer) -> Option<f32> {
+    let line_height = buffer.metrics().line_height;
+
+    let mut content = 0.0;
+
+    for line in &buffer.lines {
+        content += line.layout_opt()?.len() as f32 * line_height;
+    }
+
+    Some((content - buffer.size().1.unwrap_or(0.0)).max(0.0))
+}
+
 impl editor::Editor for Editor {
     type Font = Font;
 
@@ -641,6 +657,30 @@ impl editor::Editor for Editor {
             }
 
             internal.editor.shape_as_needed(font_system.raw(), false);
+
+            // Clamp the scroll offset to the content, the way `Action::Scroll`
+            // above already does.
+            //
+            // `shape_as_needed` scrolls the cursor into view against the bounds
+            // THIS layout happens to have — and `perform` does no shaping, so an
+            // edit's scroll is decided by the next layout, whatever size that is.
+            // cosmic-text then only pulls an over-scroll back when `scroll.line`
+            // is past the first line (`Buffer::shape_until_scroll`), so a single
+            // wrapped line — a dictated sentence, a long paste — keeps an offset
+            // measured for a narrower or shorter viewport, and the text sits
+            // above the editor with nothing but a user scroll to recover it.
+            {
+                let buffer = buffer_mut_from_editor(&mut internal.editor);
+                let mut scroll = buffer.scroll();
+
+                if let Some(max) = max_scroll(buffer)
+                    && scroll.line == 0
+                    && scroll.vertical > max
+                {
+                    scroll.vertical = max;
+                    buffer.set_scroll(scroll);
+                }
+            }
         });
     }
 
@@ -897,5 +937,100 @@ where
         cosmic_text::BufferRef::Owned(buffer) => buffer,
         cosmic_text::BufferRef::Borrowed(buffer) => buffer,
         cosmic_text::BufferRef::Arc(_buffer) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::core::text::editor::{Editor as _, Motion};
+    use crate::core::text::highlighter::PlainText;
+
+    /// One logical line, long enough to wrap at a narrow width and to fit on a
+    /// single line at a wide one, in any font.
+    const SENTENCE: &str = "remind me to send the quarterly numbers to the finance team";
+
+    const LINE_HEIGHT: f32 = 20.0;
+    const NARROW: f32 = 120.0;
+    const WIDE: f32 = 4000.0;
+
+    fn update(editor: &mut Editor, bounds: Size, highlighter: &mut PlainText) {
+        editor.update(
+            bounds,
+            Font::DEFAULT,
+            Pixels(14.0),
+            LineHeight::Absolute(Pixels(LINE_HEIGHT)),
+            Wrapping::WordOrGlyph,
+            None,
+            highlighter,
+        );
+    }
+
+    fn scroll(editor: &Editor) -> f32 {
+        editor.buffer().scroll().vertical
+    }
+
+    #[test]
+    fn a_scroll_measured_for_a_narrow_viewport_does_not_outlive_it() {
+        // `perform` does no shaping, so an edit's "scroll the caret into view"
+        // lands on whatever bounds the NEXT layout has — which, under an animating
+        // parent, can be narrower than the width the text is finally shown at.
+        //
+        // cosmic-text pulls an over-scroll back only once `scroll.line` is past the
+        // first line, and that only happens when the offset covers a whole logical
+        // line. An offset shorter than one line, on a single wrapped line, is the
+        // gap: it would otherwise hold the text above the viewport for good.
+        let mut highlighter = PlainText::new(&());
+        let mut editor = Editor::with_text(SENTENCE);
+
+        // How tall the text is when narrow, measured without provoking a scroll.
+        update(&mut editor, Size::new(NARROW, 1000.0), &mut highlighter);
+        let content = editor.min_bounds().height;
+        assert!(
+            content > LINE_HEIGHT,
+            "the fixture has to wrap at {NARROW}px for this test to mean anything"
+        );
+
+        // Short of the content by less than one line, so the caret-into-view scroll
+        // is the sub-line offset cosmic-text cannot recover from.
+        let viewport = content - (LINE_HEIGHT - 1.0);
+
+        editor.perform(Action::Move(Motion::DocumentEnd));
+        update(&mut editor, Size::new(NARROW, viewport), &mut highlighter);
+        assert!(
+            (scroll(&editor) - (LINE_HEIGHT - 1.0)).abs() < 0.5,
+            "the caret should be scrolled into view while the text overflows, got {}",
+            scroll(&editor)
+        );
+
+        // Wide enough for one line: the text now fits the same viewport, so none of
+        // it may be left above it.
+        update(&mut editor, Size::new(WIDE, viewport), &mut highlighter);
+        assert!(
+            scroll(&editor).abs() < 0.5,
+            "text that fits the viewport must not be scrolled above it, got {}",
+            scroll(&editor)
+        );
+    }
+
+    #[test]
+    fn a_caret_below_the_viewport_is_still_scrolled_to() {
+        // The clamp must not cost an editor its ability to follow the caret when
+        // the content genuinely does not fit.
+        let mut highlighter = PlainText::new(&());
+        let mut editor = Editor::with_text(SENTENCE);
+
+        editor.perform(Action::Move(Motion::DocumentEnd));
+
+        let viewport = Size::new(NARROW, LINE_HEIGHT + 1.0);
+        update(&mut editor, viewport, &mut highlighter);
+
+        let scrolled = scroll(&editor);
+        assert!(scrolled > 0.0, "the caret is below a one-line viewport");
+
+        // Laid out again at the same size: the offset is legitimate and stays.
+        update(&mut editor, viewport, &mut highlighter);
+        assert!((scroll(&editor) - scrolled).abs() < 0.5);
     }
 }
