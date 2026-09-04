@@ -25,6 +25,22 @@ svg = ["iced_graphics/svg", "resvg/text"]
 web-colors = ["iced_graphics/web-colors"]
 webgl = ["wgpu/webgl"]
 strict-assertions = []
+x11 = [
+    "dep:as-raw-xcb-connection",
+    "dep:raw-window-handle",
+    "dep:rustix",
+    "dep:tiny-xlib",
+    "dep:x11rb",
+]
+wayland = [
+    "dep:raw-window-handle",
+    "dep:rustix",
+    "dep:smithay-client-toolkit",
+    "dep:wayland-backend",
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+    "dep:wayland-sys",
+]
 
 [dependencies]
 iced_debug.workspace = true
@@ -46,3 +62,24 @@ lyon.optional = true
 
 resvg.workspace = true
 resvg.optional = true
+
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "redox")))'.dependencies]
+raw-window-handle = { version = "0.6", optional = true }
+rustix = { version = "0.38", features = ["fs"], optional = true }
+smithay-client-toolkit = { version = "0.19", default-features = false, optional = true }
+wayland-backend = { version = "0.3", features = ["client_system"], optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", features = [
+    "client",
+    "staging",
+    "unstable",
+], optional = true }
+wayland-sys = { version = "0.31", features = ["client", "dlopen"], optional = true }
+as-raw-xcb-connection = { version = "1.0", optional = true }
+tiny-xlib = { version = "0.2", optional = true }
+x11rb = { version = "0.13", features = [
+    "allow-unsafe-code",
+    "dl-libxcb",
+    "dri3",
+    "randr",
+], optional = true }

@@ -47,11 +47,45 @@ impl Compositor {
     /// Requests a new [`Compositor`] with the given [`Settings`].
     ///
     /// Returns `None` if no compatible graphics adapter could be found.
-    pub async fn request<W: compositor::Window>(
+    pub async fn request<W: compositor::Window + Clone>(
         settings: Settings,
         compatible_window: Option<W>,
         shell: Shell,
     ) -> Result<Self, Error> {
+        #[cfg(all(
+            unix,
+            any(feature = "wayland", feature = "x11"),
+            not(target_os = "macos"),
+            not(target_os = "redox")
+        ))]
+        let scanout_ids = compatible_window
+            .as_ref()
+            .and_then(super::scanout_device_ids);
+
+        #[cfg(not(all(
+            unix,
+            any(feature = "wayland", feature = "x11"),
+            not(target_os = "macos"),
+            not(target_os = "redox")
+        )))]
+        let scanout_ids: Option<(u16, u16)> = None;
+
+        // Loading the nvidia icd can spin up the discrete gpu and cost seconds on a hybrid
+        // system. Skip it unless something indicates nvidia is actually wanted.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "redox")))]
+        let disabled_nvidia_icd = if !matches!(scanout_ids, Some((0x10de, _)))
+            && std::env::var_os("__NV_PRIME_RENDER_OFFLOAD").is_none_or(|var| var == "0")
+            && std::env::var_os("WGPU_ADAPTER_NAME").is_none()
+            && std::env::var("WGPU_POWER_PREF").as_deref() != Ok("high")
+        {
+            #[allow(unsafe_code)]
+            unsafe {
+                std::env::set_var("VK_LOADER_DRIVERS_DISABLE", "nvidia*");
+            }
+            true
+        } else {
+            false
+        };
         let instance = wgpu::util::new_instance_with_webgpu_detection(&wgpu::InstanceDescriptor {
             backends: settings.backends,
             flags: if cfg!(feature = "strict-assertions") {
@@ -62,6 +96,15 @@ impl Compositor {
             ..Default::default()
         })
         .await;
+
+        // The loader has read it by now; leave the environment as we found it.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "redox")))]
+        if disabled_nvidia_icd {
+            #[allow(unsafe_code)]
+            unsafe {
+                std::env::remove_var("VK_LOADER_DRIVERS_DISABLE");
+            }
+        }
 
         log::info!("{settings:#?}");
 
@@ -77,8 +120,9 @@ impl Compositor {
         }
 
         #[allow(unsafe_code)]
-        let compatible_surface =
-            compatible_window.and_then(|window| instance.create_surface(window).ok());
+        let compatible_surface = compatible_window
+            .clone()
+            .and_then(|window| instance.create_surface(window).ok());
 
         let adapter_options = wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::from_env()
@@ -87,10 +131,47 @@ impl Compositor {
             force_fallback_adapter: false,
         };
 
-        let adapter = instance
-            .request_adapter(&adapter_options)
-            .await
-            .map_err(|_error| Error::NoAdapterFound(format!("{adapter_options:?}")))?;
+        // Prefer the gpu the compositor scans out from: wgpu ranks the discrete one
+        // first, which on a hybrid system pushes every frame across the pci bus.
+        #[cfg(all(
+            unix,
+            any(feature = "wayland", feature = "x11"),
+            not(target_os = "macos"),
+            not(target_os = "redox")
+        ))]
+        let preferred = match scanout_ids {
+            // An explicit preference is the caller overriding us; leave it alone.
+            Some((vendor, device)) if std::env::var_os("WGPU_POWER_PREF").is_none() => instance
+                .enumerate_adapters(settings.backends)
+                .await
+                .into_iter()
+                .filter(|adapter| {
+                    let info = adapter.get_info();
+                    info.vendor == u32::from(vendor) && info.device == u32::from(device)
+                })
+                .find(|adapter| {
+                    compatible_surface
+                        .as_ref()
+                        .is_none_or(|surface| adapter.is_surface_supported(surface))
+                }),
+            _ => None,
+        };
+
+        #[cfg(not(all(
+            unix,
+            any(feature = "wayland", feature = "x11"),
+            not(target_os = "macos"),
+            not(target_os = "redox")
+        )))]
+        let preferred: Option<wgpu::Adapter> = None;
+
+        let adapter = match preferred {
+            Some(adapter) => adapter,
+            None => instance
+                .request_adapter(&adapter_options)
+                .await
+                .map_err(|_error| Error::NoAdapterFound(format!("{adapter_options:?}")))?,
+        };
 
         log::info!("Selected: {:#?}", adapter.get_info());
 
@@ -261,7 +342,7 @@ impl Compositor {
 }
 
 /// Creates a [`Compositor`] with the given [`Settings`] and window.
-pub async fn new<W: compositor::Window>(
+pub async fn new<W: compositor::Window + Clone>(
     settings: Settings,
     compatible_window: W,
     shell: Shell,
@@ -339,7 +420,7 @@ impl graphics::Compositor for Compositor {
     async fn with_backend(
         settings: graphics::Settings,
         _display: impl compositor::Display,
-        compatible_window: impl compositor::Window,
+        compatible_window: impl compositor::Window + Clone,
         shell: Shell,
         backend: Option<&str>,
     ) -> Result<Self, graphics::Error> {
