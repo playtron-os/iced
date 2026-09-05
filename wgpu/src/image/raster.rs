@@ -2,6 +2,7 @@ use crate::core::Size;
 use crate::core::image;
 use crate::graphics;
 use crate::image::atlas::{self, Atlas};
+use crate::image::grace::Idle;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::{Arc, Weak};
@@ -54,6 +55,7 @@ impl Memory {
 pub struct Cache {
     map: FxHashMap<image::Id, Memory>,
     hits: FxHashSet<image::Id>,
+    idle: Idle<image::Id>,
     should_trim: bool,
 }
 
@@ -82,6 +84,7 @@ impl Cache {
         }
 
         let hits = &self.hits;
+        let idle = &mut self.idle;
 
         self.map.retain(|id, memory| {
             // Retain active allocations
@@ -90,10 +93,19 @@ impl Cache {
                     .as_ref()
                     .is_some_and(|allocation| allocation.strong_count() > 0)
             {
+                idle.touch(id);
                 return true;
             }
 
-            let retain = hits.contains(id);
+            if hits.contains(id) {
+                idle.touch(id);
+                return true;
+            }
+
+            // Unused this pass, but within its grace: a cover one frame past
+            // the edge of a shelf is about to scroll back in, and the upload
+            // it would cost is the whole texture.
+            let retain = !idle.expired(id);
 
             if !retain {
                 log::debug!("Dropping image allocation: {id:?}");

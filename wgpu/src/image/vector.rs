@@ -1,6 +1,7 @@
 use crate::core::svg;
 use crate::core::{Color, Size};
 use crate::image::atlas::{self, Atlas};
+use crate::image::grace::Idle;
 
 use resvg::tiny_skia;
 use resvg::usvg;
@@ -35,14 +36,19 @@ impl Svg {
 #[derive(Debug, Default)]
 pub struct Cache {
     svgs: FxHashMap<u64, Svg>,
-    rasterized: FxHashMap<(u64, u32, u32, ColorFilter), atlas::Entry>,
+    rasterized: FxHashMap<RasterKey, atlas::Entry>,
     svg_hits: FxHashSet<u64>,
-    rasterized_hits: FxHashSet<(u64, u32, u32, ColorFilter)>,
+    rasterized_hits: FxHashSet<RasterKey>,
+    svg_idle: Idle<u64>,
+    rasterized_idle: Idle<RasterKey>,
     should_trim: bool,
     fontdb: Option<Arc<usvg::fontdb::Database>>,
 }
 
 type ColorFilter = Option<[u8; 4]>;
+
+/// An svg rasterized at one size with one tint: `(handle id, width, height, color)`.
+type RasterKey = (u64, u32, u32, ColorFilter);
 
 impl Cache {
     /// Load svg
@@ -205,10 +211,27 @@ impl Cache {
 
         let svg_hits = &self.svg_hits;
         let rasterized_hits = &self.rasterized_hits;
+        let svg_idle = &mut self.svg_idle;
+        let rasterized_idle = &mut self.rasterized_idle;
 
-        self.svgs.retain(|k, _| svg_hits.contains(k));
+        // Same grace as the raster cache: an icon that leaves the viewport
+        // for a frame keeps its parsed tree and its rasterization, since
+        // rasterizing again is CPU work on the frame it comes back.
+        self.svgs.retain(|k, _| {
+            if svg_hits.contains(k) {
+                svg_idle.touch(k);
+                return true;
+            }
+
+            !svg_idle.expired(k)
+        });
         self.rasterized.retain(|k, entry| {
-            let retain = rasterized_hits.contains(k);
+            if rasterized_hits.contains(k) {
+                rasterized_idle.touch(k);
+                return true;
+            }
+
+            let retain = !rasterized_idle.expired(k);
 
             if !retain {
                 atlas.remove(entry);

@@ -1380,7 +1380,16 @@ async fn run_instance<P>(
                                 &mut messages,
                             );
 
-                            if message_count == messages.len() && !state.has_layout_changed() {
+                            // A pass that produced no messages is final. Any layout
+                            // it invalidated was already recomputed inside `update`
+                            // (the shell relayouts before returning), so the tree is
+                            // ready to draw; a widget animating its size re-requests
+                            // the next frame itself. Only new messages justify another
+                            // pass: the program update may swap the view, and the new
+                            // tree must handle this redraw before it is drawn. Looping
+                            // on `has_layout_changed` alone made every frame of a size
+                            // tween cost three updates and three relayouts.
+                            if message_count == messages.len() {
                                 break state;
                             }
 
@@ -1408,9 +1417,9 @@ async fn run_instance<P>(
                             accumulated_clipboard.merge(&mut intermediate_clipboard);
 
                             if redraw_count >= 2 {
-                                log::warn!(
+                                log::trace!(
                                     "More than 3 consecutive RedrawRequested events \
-                                    produced layout invalidation"
+                                    produced messages; drawing the tree as it stands"
                                 );
 
                                 // Build a minimal state to break with, carrying

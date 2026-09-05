@@ -2,6 +2,7 @@ pub(crate) mod cache;
 pub(crate) use cache::Cache;
 
 mod atlas;
+mod grace;
 
 #[cfg(feature = "image")]
 mod raster;
@@ -234,8 +235,10 @@ impl State {
                     let bounds = (*bounds * scale).round();
                     let clip_bounds = (*clip_bounds * scale).round();
 
+                    // Too small to cover a pixel: skip this image, not the
+                    // rest of the layer behind it.
                     if bounds.width < 1.0 || bounds.height < 1.0 {
-                        return;
+                        continue;
                     }
 
                     if let Some((atlas_entry, bind_group)) =
@@ -283,8 +286,10 @@ impl State {
                     let bounds = (*bounds * scale).round();
                     let clip_bounds = (*clip_bounds * scale).round();
 
+                    // Too small to cover a pixel: skip this image, not the
+                    // rest of the layer behind it.
                     if bounds.width < 1.0 || bounds.height < 1.0 {
-                        return;
+                        continue;
                     }
 
                     // Use explicit rasterize_size if provided, otherwise use display bounds.
