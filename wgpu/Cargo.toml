@@ -76,7 +76,7 @@ wayland-protocols = { version = "0.32", features = [
 ], optional = true }
 wayland-sys = { version = "0.31", features = ["client", "dlopen"], optional = true }
 as-raw-xcb-connection = { version = "1.0", optional = true }
-tiny-xlib = { version = "0.2", optional = true }
+tiny-xlib = { version = "0.2", features = ["dlopen"], optional = true }
 x11rb = { version = "0.13", features = [
     "allow-unsafe-code",
     "dl-libxcb",
