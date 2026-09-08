@@ -181,9 +181,13 @@ where
     menu_height: Length,
     render_icon: Option<Box<dyn Fn(&T, &mut Renderer, Rectangle, &Rectangle) + 'a>>,
     icon_size: Option<f32>,
+    icon_gap: Option<f32>,
     #[allow(clippy::type_complexity)]
     render_handle: Option<Box<dyn Fn(bool, &mut Renderer, Rectangle, Color, &Rectangle) + 'a>>,
     render_handle_size: f32,
+    render_badge: Option<Box<dyn Fn(&T, &mut Renderer, Rectangle, &Rectangle) + 'a>>,
+    badge_size: Option<Size>,
+    badge_gap: f32,
 }
 
 impl<'a, T, L, V, Message, Theme, Renderer> PickList<'a, T, L, V, Message, Theme, Renderer>
@@ -222,8 +226,12 @@ where
             menu_height: Length::Shrink,
             render_icon: None,
             icon_size: None,
+            icon_gap: None,
             render_handle: None,
             render_handle_size: 0.0,
+            render_badge: None,
+            badge_size: None,
+            badge_gap: 0.0,
         }
     }
 
@@ -262,6 +270,12 @@ where
         self
     }
 
+    /// Sets the gap between the icon and the label, overriding [`ICON_TEXT_GAP`].
+    pub fn icon_gap(mut self, gap: f32) -> Self {
+        self.icon_gap = Some(gap);
+        self
+    }
+
     /// Sets a custom render callback for the handle (dropdown arrow).
     ///
     /// The callback receives `(is_open, renderer, bounds, handle_color, viewport)`.
@@ -277,6 +291,24 @@ where
         self.render_handle_size = size;
         self.render_handle = Some(Box::new(render_handle));
         self.handle = Handle::None;
+        self
+    }
+
+    /// Sets a render callback for a badge drawn after the selected label.
+    ///
+    /// The callback receives the item, the renderer, the badge bounds, and the
+    /// viewport (clip bounds). `size` is the area reserved for the badge and
+    /// `gap` the space between the label and it; both are taken out of the
+    /// label's available width, so the label ellipsizes before the badge does.
+    pub fn render_badge(
+        mut self,
+        size: Size,
+        gap: f32,
+        render_badge: impl Fn(&T, &mut Renderer, Rectangle, &Rectangle) + 'a,
+    ) -> Self {
+        self.badge_size = Some(size);
+        self.badge_gap = gap;
+        self.render_badge = Some(Box::new(render_badge));
         self
     }
 
@@ -452,6 +484,15 @@ where
             });
         }
 
+        if let Some(selected) = self.selected.as_ref() {
+            let label = (self.to_string)(selected.borrow());
+
+            let _ = state.selected.update(Text {
+                content: &label,
+                ..option_text
+            });
+        }
+
         let max_width = match self.width {
             Length::Shrink => {
                 state.options.resize_with(options.len(), Default::default);
@@ -480,7 +521,10 @@ where
         };
 
         let size = {
-            let icon_offset = self.icon_size.map(|s| s + ICON_TEXT_GAP).unwrap_or(0.0);
+            let icon_offset = self
+                .icon_size
+                .map(|s| s + self.icon_gap.unwrap_or(ICON_TEXT_GAP))
+                .unwrap_or(0.0);
             let handle_width = if self.render_handle.is_some() {
                 self.render_handle_size
             } else {
@@ -494,8 +538,12 @@ where
             } else {
                 0.0
             };
+            let badge_offset = self
+                .badge_size
+                .map(|s| s.width + self.badge_gap)
+                .unwrap_or(0.0);
             let intrinsic = Size::new(
-                (max_width + handle_width + handle_gap + icon_offset).ceil(),
+                (max_width + handle_width + handle_gap + icon_offset + badge_offset).ceil(),
                 f32::from(self.line_height.to_absolute(text_size)),
             );
 
@@ -786,7 +834,10 @@ where
         let label = selected.map(&self.to_string);
 
         // Calculate icon offset
-        let icon_offset = self.icon_size.map(|s| s + ICON_TEXT_GAP).unwrap_or(0.0);
+        let icon_offset = self
+            .icon_size
+            .map(|s| s + self.icon_gap.unwrap_or(ICON_TEXT_GAP))
+            .unwrap_or(0.0);
 
         // Render icon for selected item
         if let (Some(selected_item), Some(render_icon), Some(icon_size)) =
@@ -801,8 +852,40 @@ where
             render_icon(selected_item, renderer, icon_bounds, viewport);
         }
 
+        // Reserved after the label, so the label ellipsizes before the badge does.
+        let badge_offset = self
+            .badge_size
+            .filter(|_| selected.is_some())
+            .map(|s| s.width + self.badge_gap)
+            .unwrap_or(0.0);
+
         if let Some(label) = label.or_else(|| self.placeholder.clone()) {
             let text_size = self.text_size.unwrap_or_else(|| renderer.default_size());
+
+            let text_width = bounds.width
+                - self.padding.x()
+                - handle_width
+                - icon_offset
+                - badge_offset
+                - if handle_width > 0.0 {
+                    HANDLE_TEXT_GAP
+                } else {
+                    0.0
+                };
+
+            if let (Some(selected_item), Some(render_badge), Some(badge_size)) =
+                (selected, self.render_badge.as_deref(), self.badge_size)
+            {
+                let label_width = state.selected.min_width().min(text_width.max(0.0));
+
+                let badge_bounds = Rectangle {
+                    x: bounds.x + self.padding.left + icon_offset + label_width + self.badge_gap,
+                    y: bounds.center_y() - badge_size.height / 2.0,
+                    width: badge_size.width,
+                    height: badge_size.height,
+                };
+                render_badge(selected_item, renderer, badge_bounds, viewport);
+            }
 
             renderer.fill_text(
                 Text {
@@ -811,15 +894,7 @@ where
                     line_height: self.line_height,
                     font,
                     bounds: Size::new(
-                        bounds.width
-                            - self.padding.x()
-                            - handle_width
-                            - icon_offset
-                            - if handle_width > 0.0 {
-                                HANDLE_TEXT_GAP
-                            } else {
-                                0.0
-                            },
+                        text_width,
                         f32::from(self.line_height.to_absolute(text_size)),
                     ),
                     align_x: text::Alignment::Default,
@@ -929,6 +1004,8 @@ struct State<P: text::Paragraph> {
     hovered_option: Option<usize>,
     options: Vec<paragraph::Plain<P>>,
     placeholder: paragraph::Plain<P>,
+    /// The selected label, kept laid out so a badge can be placed after it.
+    selected: paragraph::Plain<P>,
 }
 
 impl<P: text::Paragraph> State<P> {
@@ -941,6 +1018,7 @@ impl<P: text::Paragraph> State<P> {
             hovered_option: Option::default(),
             options: Vec::new(),
             placeholder: paragraph::Plain::default(),
+            selected: paragraph::Plain::default(),
         }
     }
 }
