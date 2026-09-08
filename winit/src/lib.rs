@@ -261,7 +261,11 @@ where
     let context = task::Context::from_waker(task::noop_waker_ref());
 
     struct Runner<Message: 'static, F> {
+        // Off-thread mode never polls these — the worker drives the program
+        // future — but the Runner still owns them so they outlive the loop.
+        #[cfg_attr(feature = "off-thread-render", allow(dead_code))]
         instance: std::pin::Pin<Box<F>>,
+        #[cfg_attr(feature = "off-thread-render", allow(dead_code))]
         context: task::Context<'static>,
         id: Option<String>,
         sender: mpsc::UnboundedSender<Event<Action<Message>>>,
