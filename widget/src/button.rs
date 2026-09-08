@@ -27,6 +27,7 @@ use crate::core::renderer;
 use crate::core::theme::palette;
 use crate::core::time::{Duration, Instant};
 use crate::core::touch;
+use crate::core::widget::Id;
 use crate::core::widget::operation::{self, Operation};
 use crate::core::widget::tree::{self, Tree};
 use crate::core::window;
@@ -34,6 +35,8 @@ use crate::core::{
     Background, Color, Element, Event, Layout, Length, Padding, Point, Rectangle, Shadow, Shell,
     Size, Theme, Vector, Widget,
 };
+
+use std::any::Any;
 
 /// Distance (in logical pixels) a finger may travel after pressing a button
 /// before the touch is treated as a scroll/drag rather than a tap. Kept in sync
@@ -230,6 +233,12 @@ struct State {
     /// Finger position where a touch press landed, for the tap-vs-drag slop.
     press_origin: Point,
     is_focused: bool,
+    /// Painted as focused on a parent's behalf (e.g. an enclosing focus ring),
+    /// without becoming a focus target: styling only, never key activation.
+    style_focused: bool,
+    /// The status last seen by `update`, kept here rather than on the widget so
+    /// it survives the tree rebuild that follows every message.
+    last_status: Option<Status>,
     /// The previous status before the last transition (for animation).
     previous_status: Option<Status>,
     /// When the last status transition started.
@@ -303,6 +312,7 @@ where
         let state = tree.state.downcast_mut::<State>();
 
         operation.focusable(None, layout.bounds(), state);
+        operation.custom(None, layout.bounds(), state);
         operation.container(None, layout.bounds());
         operation.traverse(&mut |operation| {
             self.content.as_widget_mut().operate(
@@ -426,33 +436,38 @@ where
         } else {
             let state = tree.state.downcast_ref::<State>();
 
-            if state.is_focused {
+            if state.is_focused || state.style_focused {
                 Status::Focused
             } else {
                 Status::Active
             }
         };
 
-        if let Event::Window(window::Event::RedrawRequested(_now)) = event {
-            // If animating background, check if transition is still in progress
-            if let Some((duration, _)) = self.animate_background {
-                let state = tree.state.downcast_ref::<State>();
-                if let Some(start) = state.transition_start
-                    && start.elapsed() < duration
-                {
-                    shell.request_redraw();
-                }
-            }
+        let state = tree.state.downcast_mut::<State>();
+        let status_changed = state.last_status != Some(current_status);
 
-            self.status = Some(current_status);
-        } else if self.status.is_none_or(|status| status != current_status) {
-            // Status changed — record transition for animation
-            if self.animate_background.is_some() {
-                let state = tree.state.downcast_mut::<State>();
-                state.previous_status = self.status;
+        // Recorded on any status change, redraws included: focus arrives through an
+        // operation, so the first update to see it is usually the next redraw.
+        if status_changed {
+            if self.animate_background.is_some() && state.last_status.is_some() {
+                state.previous_status = state.last_status;
                 state.transition_start = Some(Instant::now());
             }
 
+            state.last_status = Some(current_status);
+        }
+
+        if let Event::Window(window::Event::RedrawRequested(_now)) = event {
+            // Keep the frames coming while a transition is in flight.
+            if let Some((duration, _)) = self.animate_background
+                && let Some(start) = state.transition_start
+                && start.elapsed() < duration
+            {
+                shell.request_redraw();
+            }
+
+            self.status = Some(current_status);
+        } else if status_changed {
             shell.request_redraw();
         }
     }
@@ -470,29 +485,30 @@ where
         let bounds = layout.bounds();
         let content_layout = layout.children().next().unwrap();
         let current_status = self.status.unwrap_or(Status::Disabled);
-        let style = theme.style(&self.class, current_status);
+        let mut style = theme.style(&self.class, current_status);
 
-        // Determine the effective background, interpolating if animating
-        let effective_bg = if let Some((duration, easing)) = self.animate_background {
+        // Border and shadow ride along with the background: leaving them on the
+        // current style would step the outline while the fill is still fading.
+        if let Some((duration, easing)) = self.animate_background {
             let state = tree.state.downcast_ref::<State>();
 
-            match (state.transition_start, state.previous_status) {
-                (Some(start), Some(prev_status)) if start.elapsed() < duration => {
-                    let progress =
-                        (start.elapsed().as_secs_f32() / duration.as_secs_f32()).min(1.0);
-                    let eased = easing.value(progress);
+            if let (Some(start), Some(prev_status)) =
+                (state.transition_start, state.previous_status)
+                && start.elapsed() < duration
+            {
+                let progress = (start.elapsed().as_secs_f32() / duration.as_secs_f32()).min(1.0);
+                let eased = easing.value(progress);
 
-                    let prev_style = theme.style(&self.class, prev_status);
+                let prev_style = theme.style(&self.class, prev_status);
 
-                    Background::lerp_maybe(prev_style.background, style.background, eased)
-                }
-                _ => style.background,
+                style.background =
+                    Background::lerp_maybe(prev_style.background, style.background, eased);
+                style.border = prev_style.border.lerp(style.border, eased);
+                style.shadow = prev_style.shadow.lerp(style.shadow, eased);
             }
-        } else {
-            style.background
-        };
+        }
 
-        if effective_bg.is_some() || style.border.width > 0.0 || style.shadow.color.a > 0.0 {
+        if style.background.is_some() || style.border.width > 0.0 || style.shadow.color.a > 0.0 {
             renderer.fill_quad(
                 renderer::Quad {
                     bounds,
@@ -501,7 +517,9 @@ where
                     snap: style.snap,
                     border_only: false,
                 },
-                effective_bg.unwrap_or(Background::Color(Color::TRANSPARENT)),
+                style
+                    .background
+                    .unwrap_or(Background::Color(Color::TRANSPARENT)),
             );
         }
 
@@ -569,6 +587,28 @@ where
     fn from(button: Button<'a, Message, Theme, Renderer>) -> Self {
         Self::new(button)
     }
+}
+
+/// Produces an [`Operation`] that paints every [`Button`] in the subtree it runs over as
+/// [`Status::Focused`] — styling only, so `Enter`/`Space` still need real iced focus.
+pub fn style_focus<T>(focused: bool) -> impl Operation<T> {
+    struct StyleFocus {
+        focused: bool,
+    }
+
+    impl<T> Operation<T> for StyleFocus {
+        fn custom(&mut self, _id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Any) {
+            if let Some(state) = state.downcast_mut::<State>() {
+                state.style_focused = self.focused;
+            }
+        }
+
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
+            operate(self);
+        }
+    }
+
+    StyleFocus { focused }
 }
 
 /// The default [`Padding`] of a [`Button`].
@@ -857,5 +897,216 @@ fn disabled(style: Style) -> Style {
             .map(|background| background.scale_alpha(0.5)),
         text_color: style.text_color.scale_alpha(0.5),
         ..style
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::Space;
+    use crate::core::image;
+    use crate::core::widget::operation;
+    use crate::core::{Transformation, border};
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct Pressed;
+
+    /// A renderer that only remembers the quads it was asked to fill.
+    #[derive(Default)]
+    struct Recorder {
+        quads: Vec<renderer::Quad>,
+    }
+
+    impl crate::core::Renderer for Recorder {
+        fn start_layer(&mut self, _bounds: Rectangle) {}
+
+        fn end_layer(&mut self) {}
+
+        fn start_transformation(&mut self, _transformation: Transformation) {}
+
+        fn end_transformation(&mut self) {}
+
+        fn fill_quad(&mut self, quad: renderer::Quad, _background: impl Into<Background>) {
+            self.quads.push(quad);
+        }
+
+        fn allocate_image(
+            &mut self,
+            _handle: &image::Handle,
+            _callback: impl FnOnce(Result<image::Allocation, image::Error>) + Send + 'static,
+        ) {
+        }
+
+        fn hint(&mut self, _scale_factor: f32) {}
+
+        fn scale_factor(&self) -> Option<f32> {
+            None
+        }
+
+        fn reset(&mut self, _new_bounds: Rectangle) {}
+    }
+
+    type TestButton<'a> = Button<'a, Pressed, Theme, Recorder>;
+
+    /// A button whose focused style is the only one with a border, so a stepped
+    /// border and a tweened one are told apart by the width alone.
+    fn button() -> TestButton<'static> {
+        Button::new(Space::new())
+            .on_press(Pressed)
+            .animate_background(Duration::from_millis(200))
+            .style(|_theme, status| Style {
+                background: Some(Background::Color(Color::BLACK)),
+                border: if status == Status::Focused {
+                    border::rounded(0).width(4)
+                } else {
+                    Border::default()
+                },
+                ..Style::default()
+            })
+    }
+
+    fn tree(button: &TestButton<'_>) -> Tree {
+        Tree::new(button as &dyn Widget<Pressed, Theme, Recorder>)
+    }
+
+    fn node(button: &mut TestButton<'_>, tree: &mut Tree) -> layout::Node {
+        button.layout(
+            tree,
+            &Recorder::default(),
+            &layout::Limits::new(Size::ZERO, Size::new(200.0, 50.0)),
+        )
+    }
+
+    fn redraw(button: &mut TestButton<'_>, tree: &mut Tree, node: &layout::Node) {
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+
+        button.update(
+            tree,
+            &Event::Window(window::Event::RedrawRequested(Instant::now())),
+            Layout::new(node),
+            mouse::Cursor::Unavailable,
+            &Recorder::default(),
+            &mut shell,
+            &Rectangle::with_size(Size::new(200.0, 50.0)),
+        );
+    }
+
+    fn style_focus_button(button: &mut TestButton<'_>, tree: &mut Tree, node: &layout::Node) {
+        let mut operation = style_focus::<()>(true);
+
+        button.operate(
+            tree,
+            Layout::new(node),
+            &Recorder::default(),
+            &mut operation as &mut dyn Operation,
+        );
+    }
+
+    #[test]
+    fn style_focus_paints_the_button_as_focused() {
+        let mut button = button();
+        let mut tree = tree(&button);
+        let node = node(&mut button, &mut tree);
+
+        redraw(&mut button, &mut tree, &node);
+        assert_eq!(button.status, Some(Status::Active));
+
+        style_focus_button(&mut button, &mut tree, &node);
+        redraw(&mut button, &mut tree, &node);
+
+        assert_eq!(button.status, Some(Status::Focused));
+    }
+
+    #[test]
+    fn style_focus_is_not_keyboard_focus() {
+        // The ring owns activation; routing this through `is_focused` would fire
+        // both the ring's submit and the button's `on_press`.
+        let mut button = button();
+        let mut tree = tree(&button);
+        let node = node(&mut button, &mut tree);
+
+        style_focus_button(&mut button, &mut tree, &node);
+
+        let state = tree.state.downcast_ref::<State>();
+        assert!(state.style_focused);
+        assert!(!operation::Focusable::is_focused(state));
+
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+
+        button.update(
+            &mut tree,
+            &Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(key::Named::Enter),
+                modified_key: keyboard::Key::Named(key::Named::Enter),
+                physical_key: keyboard::key::Physical::Unidentified(
+                    keyboard::key::NativeCode::Unidentified,
+                ),
+                location: keyboard::Location::Standard,
+                modifiers: keyboard::Modifiers::empty(),
+                text: None,
+                repeat: false,
+            }),
+            Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &Recorder::default(),
+            &mut shell,
+            &Rectangle::with_size(Size::new(200.0, 50.0)),
+        );
+
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn a_status_change_first_seen_on_a_redraw_starts_a_transition() {
+        let mut button = button();
+        let mut tree = tree(&button);
+        let node = node(&mut button, &mut tree);
+
+        redraw(&mut button, &mut tree, &node);
+        assert_eq!(tree.state.downcast_ref::<State>().previous_status, None);
+
+        style_focus_button(&mut button, &mut tree, &node);
+        redraw(&mut button, &mut tree, &node);
+
+        let state = tree.state.downcast_ref::<State>();
+        assert_eq!(state.previous_status, Some(Status::Active));
+        assert!(state.transition_start.is_some());
+    }
+
+    #[test]
+    fn the_border_tweens_with_the_background() {
+        let mut button = button();
+        let mut tree = tree(&button);
+        let node = node(&mut button, &mut tree);
+
+        redraw(&mut button, &mut tree, &node);
+        style_focus_button(&mut button, &mut tree, &node);
+        redraw(&mut button, &mut tree, &node);
+
+        let mut renderer = Recorder::default();
+
+        button.draw(
+            &tree,
+            &mut renderer,
+            &Theme::Dark,
+            &renderer::Style::default(),
+            Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &Rectangle::with_size(Size::new(200.0, 50.0)),
+        );
+
+        let border = renderer
+            .quads
+            .first()
+            .expect("the button fills a quad")
+            .border;
+
+        // Barely into a 200ms transition, so the focused border is still growing
+        // rather than already at its full 4px.
+        assert!(border.width > 0.0, "the border is on its way in");
+        assert!(border.width < 1.0, "the border did not step to its target");
     }
 }
