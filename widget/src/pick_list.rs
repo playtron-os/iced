@@ -1182,3 +1182,49 @@ pub fn default(theme: &Theme, status: Status) -> Style {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options() -> [String; 2] {
+        [String::from("Apple"), String::from("Orange")]
+    }
+
+    fn pick_list(options: &[String]) -> PickList<'_, String, &[String], &String, ()> {
+        PickList::new(None, options, Clone::clone)
+    }
+
+    /// The badge and icon-gap hooks are opt-in; an untouched pick list must
+    /// reserve nothing and keep using `ICON_TEXT_GAP`.
+    #[test]
+    fn badge_and_icon_gap_are_opt_in() {
+        let options = options();
+        let pick_list = pick_list(&options);
+
+        assert!(pick_list.render_badge.is_none());
+        assert_eq!(pick_list.badge_size, None);
+        assert_eq!(pick_list.badge_gap, 0.0);
+        assert_eq!(pick_list.icon_gap, None);
+    }
+
+    #[test]
+    fn render_badge_records_its_reservation() {
+        let options = options();
+        let pick_list =
+            pick_list(&options).render_badge(Size::new(40.0, 20.0), 2.0, |_, _, _, _| {});
+
+        assert!(pick_list.render_badge.is_some());
+        assert_eq!(pick_list.badge_size, Some(Size::new(40.0, 20.0)));
+        assert_eq!(pick_list.badge_gap, 2.0);
+    }
+
+    #[test]
+    fn icon_gap_overrides_the_default() {
+        let options = options();
+        let pick_list = pick_list(&options).icon_gap(2.0);
+
+        assert_eq!(pick_list.icon_gap, Some(2.0));
+        assert_ne!(pick_list.icon_gap, Some(ICON_TEXT_GAP));
+    }
+}
