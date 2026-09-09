@@ -169,6 +169,14 @@ fn restores(fade_start: f32, fade_end: f32, alpha: f32) -> bool {
     fade_start < fade_end || alpha < 1.0
 }
 
+/// Resolves token-style radii such as `9999px` to a valid radius for the
+/// rendered rectangle. Without this, the rounded-rectangle SDF is empty when
+/// a pill radius is larger than half the rectangle's height.
+fn clamp_border_radii(border_radius: [f32; 4], bounds_width: f32, bounds_height: f32) -> [f32; 4] {
+    let maximum = (bounds_width.min(bounds_height) * 0.5).max(0.0);
+    border_radius.map(|radius| radius.max(0.0).min(maximum))
+}
+
 /// Builds every uniform block for one blur region, in execution order.
 ///
 /// Pure, and lifted out of [`Pipeline::render`] for one reason: the property
@@ -659,12 +667,16 @@ impl Pipeline {
         );
 
         // Scale border radius by scale factor
-        let scaled_border_radius = [
-            blur.border_radius[0] * scale_factor,
-            blur.border_radius[1] * scale_factor,
-            blur.border_radius[2] * scale_factor,
-            blur.border_radius[3] * scale_factor,
-        ];
+        let scaled_border_radius = clamp_border_radii(
+            [
+                blur.border_radius[0] * scale_factor,
+                blur.border_radius[1] * scale_factor,
+                blur.border_radius[2] * scale_factor,
+                blur.border_radius[3] * scale_factor,
+            ],
+            bounds.width,
+            bounds.height,
+        );
 
         // Additive crossfade approach for semi-transparent windows:
         //
@@ -1018,6 +1030,8 @@ pub struct TextureCache {
     intermediate: Option<(wgpu::Texture, wgpu::TextureView, Size<u32>)>,
     /// Copy of the scene before blur regions
     scene_copy: Option<(wgpu::Texture, wgpu::TextureView, Size<u32>)>,
+    /// Ping-pong target used when blur surfaces stack.
+    composite: Option<(wgpu::Texture, wgpu::TextureView, Size<u32>)>,
 }
 
 impl TextureCache {
@@ -1026,6 +1040,7 @@ impl TextureCache {
         Self {
             intermediate: None,
             scene_copy: None,
+            composite: None,
         }
     }
 
@@ -1111,6 +1126,47 @@ impl TextureCache {
         self.scene_copy.as_ref().map(|(t, _, _)| t)
     }
 
+    /// Gets or creates the second full-scene texture used for stacked blurs.
+    pub fn get_composite(
+        &mut self,
+        device: &wgpu::Device,
+        size: Size<u32>,
+        format: wgpu::TextureFormat,
+    ) -> &wgpu::TextureView {
+        let needs_resize = self
+            .composite
+            .as_ref()
+            .is_none_or(|(_, _, s)| s.width != size.width || s.height != size.height);
+
+        if needs_resize {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("iced_wgpu.blur.composite_texture"),
+                size: wgpu::Extent3d {
+                    width: size.width,
+                    height: size.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.composite = Some((texture, view, size));
+        }
+
+        &self.composite.as_ref().unwrap().1
+    }
+
+    /// Gets the raw stacked-blur composite texture.
+    pub fn get_composite_texture(&self) -> Option<&wgpu::Texture> {
+        self.composite.as_ref().map(|(texture, _, _)| texture)
+    }
+
     /// Gets or creates both intermediate and scene copy textures, returning their views.
     ///
     /// This method ensures both textures exist and returns their views together,
@@ -1192,7 +1248,9 @@ impl Default for TextureCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{BackdropBlur, BlurUniforms, PassGeometry, build_uniforms, restores};
+    use super::{
+        BackdropBlur, BlurUniforms, PassGeometry, build_uniforms, clamp_border_radii, restores,
+    };
     use crate::core::Rectangle;
 
     fn geometry() -> PassGeometry {
@@ -1213,6 +1271,15 @@ mod tests {
             width: 100.0,
             height: 100.0,
         }
+    }
+
+    #[test]
+    fn a_max_token_radius_resolves_to_the_pill_height() {
+        assert_eq!(clamp_border_radii([9999.0; 4], 400.0, 31.0), [15.5; 4]);
+        assert_eq!(
+            clamp_border_radii([2.0, 4.0, 6.0, 8.0], 400.0, 31.0),
+            [2.0, 4.0, 6.0, 8.0]
+        );
     }
 
     #[test]

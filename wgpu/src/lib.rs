@@ -117,6 +117,77 @@ pub struct Renderer {
     staging_belt: wgpu::util::StagingBelt,
 }
 
+fn content_for_blur_region(
+    region: &blur::BlurRegion,
+    content: &[blur::PostBlurContent],
+    layer_count: usize,
+) -> Option<blur::PostBlurContent> {
+    content
+        .iter()
+        .filter(|content| content.start_layer == region.layer_index)
+        .min_by_key(|content| {
+            content
+                .end_layer
+                .unwrap_or(layer_count)
+                .saturating_sub(content.start_layer)
+        })
+        .cloned()
+}
+
+fn mark_post_blur_layers(
+    content: &blur::PostBlurContent,
+    layer_count: usize,
+    rendered: &mut [bool],
+) {
+    let tracked_layer_count = layer_count.min(rendered.len());
+    let end = content
+        .end_layer
+        .unwrap_or(tracked_layer_count)
+        .min(tracked_layer_count);
+    rendered[content.start_layer.min(end)..end].fill(true);
+}
+
+#[cfg(test)]
+mod stacked_blur_tests {
+    use super::{content_for_blur_region, mark_post_blur_layers};
+    use crate::{
+        blur::{BackdropBlur, BlurRegion, PostBlurContent},
+        core::Rectangle,
+    };
+
+    fn content(start_layer: usize, end_layer: Option<usize>) -> PostBlurContent {
+        PostBlurContent {
+            bounds: Rectangle::default(),
+            start_layer,
+            end_layer,
+        }
+    }
+
+    #[test]
+    fn a_blur_region_selects_its_smallest_matching_content_range() {
+        let region = BlurRegion {
+            blur: BackdropBlur::new(Rectangle::default(), 20.0),
+            layer_index: 3,
+        };
+        let content = [content(3, Some(10)), content(3, Some(7)), content(8, None)];
+
+        let selected = content_for_blur_region(&region, &content, 12).unwrap();
+
+        assert_eq!(selected.start_layer, 3);
+        assert_eq!(selected.end_layer, Some(7));
+    }
+
+    #[test]
+    fn rendered_post_blur_layers_are_marked_without_exceeding_the_frame() {
+        let mut rendered = vec![false; 6];
+
+        mark_post_blur_layers(&content(2, None), 8, &mut rendered);
+        mark_post_blur_layers(&content(9, Some(12)), 8, &mut rendered);
+
+        assert_eq!(rendered, [false, false, true, true, true, true]);
+    }
+}
+
 impl Renderer {
     pub fn new(engine: Engine, default_font: Font, default_text_size: Pixels) -> Self {
         Self {
@@ -1015,6 +1086,177 @@ impl Renderer {
         });
     }
 
+    fn render_single_backdrop_blur(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        viewport: &Viewport,
+        region: &blur::BlurRegion,
+        post_blur_content: &[blur::PostBlurContent],
+        copy_background_to_target: bool,
+    ) {
+        let physical_size = viewport.physical_size();
+        let source = self
+            .blur_cache
+            .get_scene_copy_texture()
+            .unwrap()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        if copy_background_to_target {
+            self.engine.blur_pipeline.blit_full(
+                &self.engine.device,
+                encoder,
+                &source,
+                target,
+                physical_size,
+            );
+        }
+
+        let intermediate = self.blur_cache.get_intermediate(
+            &self.engine.device,
+            physical_size,
+            self.engine.format,
+        );
+        self.engine.blur_pipeline.render(
+            &self.engine.device,
+            encoder,
+            &source,
+            intermediate,
+            target,
+            &region.blur,
+            viewport,
+        );
+
+        if !post_blur_content.is_empty() {
+            self.render_post_blur_layers(encoder, target, viewport, post_blur_content, &[]);
+        }
+    }
+
+    /// Composes blur surfaces in draw order so a later surface samples the
+    /// already blurred backdrop and foreground of every earlier surface.
+    fn render_stacked_backdrop_blurs(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        viewport: &Viewport,
+        regions: &[blur::BlurRegion],
+        post_blur_content: &[blur::PostBlurContent],
+    ) {
+        debug_assert!(regions.len() > 1);
+
+        let physical_size = viewport.physical_size();
+        let layer_count = self.layers.as_slice().len();
+        let mut rendered_layers = vec![false; layer_count];
+
+        let _ =
+            self.blur_cache
+                .get_composite(&self.engine.device, physical_size, self.engine.format);
+
+        let mut source_is_scene_copy = true;
+        for region in regions {
+            let (source, destination) = {
+                let scene_copy = self
+                    .blur_cache
+                    .get_scene_copy_texture()
+                    .unwrap()
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let composite = self
+                    .blur_cache
+                    .get_composite_texture()
+                    .unwrap()
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                if source_is_scene_copy {
+                    (scene_copy, composite)
+                } else {
+                    (composite, scene_copy)
+                }
+            };
+
+            self.engine.blur_pipeline.blit_full(
+                &self.engine.device,
+                encoder,
+                &source,
+                &destination,
+                physical_size,
+            );
+            {
+                let intermediate = self.blur_cache.get_intermediate(
+                    &self.engine.device,
+                    physical_size,
+                    self.engine.format,
+                );
+                self.engine.blur_pipeline.render(
+                    &self.engine.device,
+                    encoder,
+                    &source,
+                    intermediate,
+                    &destination,
+                    &region.blur,
+                    viewport,
+                );
+            }
+
+            if let Some(content) = content_for_blur_region(region, post_blur_content, layer_count) {
+                self.render_post_blur_layers(
+                    encoder,
+                    &destination,
+                    viewport,
+                    std::slice::from_ref(&content),
+                    &[],
+                );
+                mark_post_blur_layers(&content, layer_count, &mut rendered_layers);
+            }
+
+            source_is_scene_copy = !source_is_scene_copy;
+        }
+
+        // Keep the final replay and swapchain blit on the primary offscreen
+        // texture. WebGL otherwise loses parts of an odd-region frame when the
+        // ping-pong target is sampled immediately after receiving layer draws.
+        if !source_is_scene_copy {
+            let composite = self
+                .blur_cache
+                .get_composite_texture()
+                .unwrap()
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let scene_copy = self
+                .blur_cache
+                .get_scene_copy_texture()
+                .unwrap()
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.engine.blur_pipeline.blit_full(
+                &self.engine.device,
+                encoder,
+                &composite,
+                &scene_copy,
+                physical_size,
+            );
+        }
+
+        let final_scene = self
+            .blur_cache
+            .get_scene_copy_texture()
+            .unwrap()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        if !post_blur_content.is_empty() {
+            self.render_post_blur_layers(
+                encoder,
+                &final_scene,
+                viewport,
+                post_blur_content,
+                &rendered_layers,
+            );
+        }
+        self.engine.blur_pipeline.blit_full(
+            &self.engine.device,
+            encoder,
+            &final_scene,
+            target,
+            physical_size,
+        );
+    }
+
     /// WASM-specific: Draw with offscreen blur support.
     ///
     /// On WASM/WebGL, we can't copy from the swapchain (no COPY_SRC support).
@@ -1051,59 +1293,48 @@ impl Renderer {
         let regions = self.blur_state.take_regions();
         let post_blur_content = self.blur_state.take_post_blur_content();
 
-        // First, blit background to swapchain (need fresh view reference)
+        // Include gradient fades in the source sampled by every blur region.
         let scene_view = self
             .blur_cache
             .get_scene_copy_texture()
             .unwrap()
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.engine.blur_pipeline.blit_full(
-            &self.engine.device,
-            encoder,
-            &scene_view,
-            target,
-            physical_size,
-        );
+        self.apply_gradient_fades(encoder, &scene_view, viewport);
 
-        // Apply gradient fades to swapchain before blur so faded content
-        // is included in the blurred regions
-        self.apply_gradient_fades(encoder, target, viewport);
-
-        // Apply blur for each region
-        for region in &regions {
-            // Ensure textures exist (get_blur_textures creates them if needed)
-            let _ = self.blur_cache.get_blur_textures(
-                &self.engine.device,
-                physical_size,
-                self.engine.format,
-            );
-
-            // Create owned views to avoid lifetime issues
-            let scene_view_owned = self
-                .blur_cache
-                .get_scene_copy_texture()
-                .unwrap()
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let intermediate_texture = self.blur_cache.get_intermediate(
-                &self.engine.device,
-                physical_size,
-                self.engine.format,
-            );
-
-            self.engine.blur_pipeline.render(
-                &self.engine.device,
+        match regions.as_slice() {
+            [] => {
+                self.engine.blur_pipeline.blit_full(
+                    &self.engine.device,
+                    encoder,
+                    &scene_view,
+                    target,
+                    physical_size,
+                );
+                if !post_blur_content.is_empty() {
+                    self.render_post_blur_layers(
+                        encoder,
+                        target,
+                        viewport,
+                        &post_blur_content,
+                        &[],
+                    );
+                }
+            }
+            [region] => self.render_single_backdrop_blur(
                 encoder,
-                &scene_view_owned,
-                intermediate_texture,
                 target,
-                &region.blur,
                 viewport,
-            );
-        }
-
-        // Render post-blur content on top
-        if !post_blur_content.is_empty() {
-            self.render_post_blur_layers(encoder, target, viewport, &post_blur_content);
+                region,
+                &post_blur_content,
+                true,
+            ),
+            _ => self.render_stacked_backdrop_blurs(
+                encoder,
+                target,
+                viewport,
+                &regions,
+                &post_blur_content,
+            ),
         }
     }
 
@@ -1193,39 +1424,23 @@ impl Renderer {
             log::warn!("apply_backdrop_blurs: target_texture is None - blur won't work!");
         }
 
-        // Now get the views again for rendering (textures already exist)
-        let (scene_copy_view, intermediate_view) = self.blur_cache.get_blur_textures(
-            &self.engine.device,
-            physical_size,
-            self.engine.format,
-        );
-
-        // Process each blur region - this blurs the background and writes to target
-        for (i, region) in regions.iter().enumerate() {
-            log::trace!(
-                "apply_backdrop_blurs: rendering blur region {} - bounds=({:.1},{:.1},{:.1},{:.1}), radius={:.1}",
-                i,
-                region.blur.bounds.x,
-                region.blur.bounds.y,
-                region.blur.bounds.width,
-                region.blur.bounds.height,
-                region.blur.radius
-            );
-            self.engine.blur_pipeline.render(
-                &self.engine.device,
+        if let [region] = regions.as_slice() {
+            self.render_single_backdrop_blur(
                 encoder,
-                scene_copy_view,   // Source (background only, no children)
-                intermediate_view, // Intermediate for two-pass
-                target,            // Final target
-                &region.blur,
+                target,
                 viewport,
+                region,
+                &post_blur_content,
+                false,
             );
-        }
-
-        // Now render the post-blur content (children) on top of the blurred background
-        // This is done by re-rendering the layers that were skipped in the main pass
-        if !post_blur_content.is_empty() {
-            self.render_post_blur_layers(encoder, target, viewport, &post_blur_content);
+        } else {
+            self.render_stacked_backdrop_blurs(
+                encoder,
+                target,
+                viewport,
+                &regions,
+                &post_blur_content,
+            );
         }
     }
 
@@ -1236,6 +1451,7 @@ impl Renderer {
         frame: &wgpu::TextureView,
         viewport: &Viewport,
         post_blur_content: &[blur::PostBlurContent],
+        skip_layers: &[bool],
     ) {
         log::trace!(
             "render_post_blur_layers: rendering {} regions, total layers: {}",
@@ -1286,10 +1502,11 @@ impl Renderer {
 
         for (layer_index, layer) in self.layers.as_slice().iter().enumerate() {
             // Check if this layer is within any post-blur region
-            let is_post_blur = post_blur_content.iter().any(|content| {
-                let end = content.end_layer.unwrap_or(usize::MAX);
-                layer_index >= content.start_layer && layer_index < end
-            });
+            let is_post_blur = !skip_layers.get(layer_index).copied().unwrap_or(false)
+                && post_blur_content.iter().any(|content| {
+                    let end = content.end_layer.unwrap_or(usize::MAX);
+                    layer_index >= content.start_layer && layer_index < end
+                });
 
             if !is_post_blur {
                 // Still count the layers for offset tracking,
