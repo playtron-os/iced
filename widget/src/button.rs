@@ -95,6 +95,7 @@ where
     class: Theme::Class<'a>,
     status: Option<Status>,
     animate_background: Option<(Duration, Easing)>,
+    snap_fill: bool,
 }
 
 enum OnPress<'a, Message> {
@@ -131,6 +132,7 @@ where
             class: Theme::default(),
             status: None,
             animate_background: None,
+            snap_fill: false,
         }
     }
 
@@ -223,6 +225,14 @@ where
     #[must_use]
     pub fn animate_background_with_easing(mut self, duration: Duration, easing: Easing) -> Self {
         self.animate_background = Some((duration, easing));
+        self
+    }
+
+    /// Takes the background straight on a status change, leaving only the
+    /// border and shadow to tween — Material animates its shape, not its fill.
+    #[must_use]
+    pub fn snap_fill(mut self, snap: bool) -> Self {
+        self.snap_fill = snap;
         self
     }
 }
@@ -487,8 +497,8 @@ where
         let current_status = self.status.unwrap_or(Status::Disabled);
         let mut style = theme.style(&self.class, current_status);
 
-        // Border and shadow ride along with the background: leaving them on the
-        // current style would step the outline while the fill is still fading.
+        // Border and shadow always tween; the background joins them unless
+        // `snap_fill` takes it straight, as Material animates shape, not fill.
         if let Some((duration, easing)) = self.animate_background {
             let state = tree.state.downcast_ref::<State>();
 
@@ -501,8 +511,11 @@ where
 
                 let prev_style = theme.style(&self.class, prev_status);
 
-                style.background =
-                    Background::lerp_maybe(prev_style.background, style.background, eased);
+                if !self.snap_fill {
+                    style.background =
+                        Background::lerp_maybe(prev_style.background, style.background, eased);
+                }
+
                 style.border = prev_style.border.lerp(style.border, eased);
                 style.shadow = prev_style.shadow.lerp(style.shadow, eased);
             }
@@ -912,10 +925,12 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct Pressed;
 
-    /// A renderer that only remembers the quads it was asked to fill.
+    /// A renderer that only remembers the quads it was asked to fill, and the
+    /// background each was filled with.
     #[derive(Default)]
     struct Recorder {
         quads: Vec<renderer::Quad>,
+        backgrounds: Vec<Background>,
     }
 
     impl crate::core::Renderer for Recorder {
@@ -927,8 +942,9 @@ mod tests {
 
         fn end_transformation(&mut self) {}
 
-        fn fill_quad(&mut self, quad: renderer::Quad, _background: impl Into<Background>) {
+        fn fill_quad(&mut self, quad: renderer::Quad, background: impl Into<Background>) {
             self.quads.push(quad);
+            self.backgrounds.push(background.into());
         }
 
         fn allocate_image(
@@ -949,20 +965,28 @@ mod tests {
 
     type TestButton<'a> = Button<'a, Pressed, Theme, Recorder>;
 
-    /// A button whose focused style is the only one with a border, so a stepped
-    /// border and a tweened one are told apart by the width alone.
+    /// A button whose focused style is the only one with a border and the only
+    /// white fill, so a stepped border or fill is told apart from a tweened one.
     fn button() -> TestButton<'static> {
         Button::new(Space::new())
             .on_press(Pressed)
             .animate_background(Duration::from_millis(200))
-            .style(|_theme, status| Style {
-                background: Some(Background::Color(Color::BLACK)),
-                border: if status == Status::Focused {
-                    border::rounded(0).width(4)
-                } else {
-                    Border::default()
-                },
-                ..Style::default()
+            .style(|_theme, status| {
+                let focused = status == Status::Focused;
+
+                Style {
+                    background: Some(Background::Color(if focused {
+                        Color::WHITE
+                    } else {
+                        Color::BLACK
+                    })),
+                    border: if focused {
+                        border::rounded(0).width(4)
+                    } else {
+                        Border::default()
+                    },
+                    ..Style::default()
+                }
             })
     }
 
@@ -991,6 +1015,43 @@ mod tests {
             &mut shell,
             &Rectangle::with_size(Size::new(200.0, 50.0)),
         );
+    }
+
+    /// Draws once and returns the fill and border of the button's own quad.
+    fn paint(button: &TestButton<'_>, tree: &Tree, node: &layout::Node) -> (Background, Border) {
+        let mut renderer = Recorder::default();
+
+        button.draw(
+            tree,
+            &mut renderer,
+            &Theme::Dark,
+            &renderer::Style::default(),
+            Layout::new(node),
+            mouse::Cursor::Unavailable,
+            &Rectangle::with_size(Size::new(200.0, 50.0)),
+        );
+
+        (
+            *renderer
+                .backgrounds
+                .first()
+                .expect("the button fills a quad"),
+            renderer
+                .quads
+                .first()
+                .expect("the button fills a quad")
+                .border,
+        )
+    }
+
+    /// Backdates a running transition, so a frame is read from the middle of the
+    /// tween instead of the hair's width the clock has actually moved.
+    fn wind_back(tree: &mut Tree, elapsed: Duration) {
+        let state = tree.state.downcast_mut::<State>();
+
+        state.transition_start = state
+            .transition_start
+            .and_then(|start| start.checked_sub(elapsed));
     }
 
     fn style_focus_button(button: &mut TestButton<'_>, tree: &mut Tree, node: &layout::Node) {
@@ -1086,27 +1147,51 @@ mod tests {
         style_focus_button(&mut button, &mut tree, &node);
         redraw(&mut button, &mut tree, &node);
 
-        let mut renderer = Recorder::default();
-
-        button.draw(
-            &tree,
-            &mut renderer,
-            &Theme::Dark,
-            &renderer::Style::default(),
-            Layout::new(&node),
-            mouse::Cursor::Unavailable,
-            &Rectangle::with_size(Size::new(200.0, 50.0)),
-        );
-
-        let border = renderer
-            .quads
-            .first()
-            .expect("the button fills a quad")
-            .border;
+        let (_background, border) = paint(&button, &tree, &node);
 
         // Barely into a 200ms transition, so the focused border is still growing
         // rather than already at its full 4px.
         assert!(border.width > 0.0, "the border is on its way in");
         assert!(border.width < 1.0, "the border did not step to its target");
+    }
+
+    #[test]
+    fn the_background_tweens_with_the_border_by_default() {
+        let mut button = button();
+        let mut tree = tree(&button);
+        let node = node(&mut button, &mut tree);
+
+        redraw(&mut button, &mut tree, &node);
+        style_focus_button(&mut button, &mut tree, &node);
+        redraw(&mut button, &mut tree, &node);
+        wind_back(&mut tree, Duration::from_millis(100));
+
+        let (background, border) = paint(&button, &tree, &node);
+
+        let Background::Color(fill) = background else {
+            panic!("the fill is a solid color");
+        };
+
+        assert!(fill.r > 0.0, "the black fill is on its way to white");
+        assert!(fill.r < 1.0, "the fill did not step to its target");
+        assert!(border.width > 0.0 && border.width < 4.0, "mid-tween");
+    }
+
+    #[test]
+    fn snap_fill_takes_the_background_straight() {
+        let mut button = button().snap_fill(true);
+        let mut tree = tree(&button);
+        let node = node(&mut button, &mut tree);
+
+        redraw(&mut button, &mut tree, &node);
+        style_focus_button(&mut button, &mut tree, &node);
+        redraw(&mut button, &mut tree, &node);
+        wind_back(&mut tree, Duration::from_millis(100));
+
+        let (background, border) = paint(&button, &tree, &node);
+
+        // The focused fill lands whole while the focused border is still growing.
+        assert_eq!(background, Background::Color(Color::WHITE));
+        assert!(border.width > 0.0 && border.width < 4.0, "mid-tween");
     }
 }
