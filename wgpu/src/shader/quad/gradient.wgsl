@@ -436,7 +436,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
             // Inset shadow - draw inside the quad
             // Spread contracts the inset shadow shape (positive spread = larger shadow area inside)
             var inset_shadow_dist: f32 = rounded_box_sdf(
-                -(input.position.xy - pos - input.shadow.xy - scale/2.0) * 2.0,
+                -(input.position.xy - pos - input.shadow_offset - scale/2.0) * 2.0,
                 scale - vec2(spread * 2.0),
                 max(input.border_radius * 2.0 - vec4(spread * 2.0), vec4(0.0))
             ) / 2.0;
@@ -448,7 +448,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
             // Outset shadow - draw outside the quad
             // Spread expands the shadow shape (positive = larger shadow, negative = smaller)
             var shadow_dist: f32 = rounded_box_sdf(
-                -(input.position.xy - pos - input.shadow.xy - scale/2.0) * 2.0,
+                -(input.position.xy - pos - input.shadow_offset - scale/2.0) * 2.0,
                 scale + vec2(spread * 2.0),
                 max(input.border_radius * 2.0 + vec4(spread * 2.0), vec4(0.0))
             ) / 2.0;
