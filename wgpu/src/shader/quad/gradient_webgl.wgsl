@@ -39,12 +39,13 @@ struct GradientVertexOutput {
     @location(4) position_and_scale: vec4<f32>,                 // 4 components
     @location(5) @interpolate(flat) border_color_packed: u32,  // 1 component (was 4)
     @location(6) border_radius: vec4<f32>,                      // 4 components
-    @location(7) border_width: f32,                             // 1 component
+    // Packed as two halves: x = border width, y = shadow blur radius
+    @location(7) @interpolate(flat) border_width_and_blur: u32, // 1 component
     @location(8) @interpolate(flat) shadow_color_packed: u32,  // 1 component (was 4)
     @location(9) shadow_offset: vec2<f32>,                      // 2 components
-    @location(10) shadow_blur_radius: f32,                      // 1 component
+    // Packed as two halves: the border dash [on, off]
+    @location(10) @interpolate(flat) border_dash: u32,         // 1 component
     @location(11) @interpolate(flat) flags: u32,               // 1 component (gradient_type + shadow_inset + border_only)
-    @location(12) border_dash: vec2<f32>,                       // 2 components
 }
 
 // Pack a vec4<f32> color (0.0-1.0) into a single u32 (RGBA8)
@@ -134,11 +135,12 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.border_color_packed = pack_color_to_u32(premultiply(input.border_color));
     out.border_radius = border_radius * globals.scale;
     // WebGL2: pass max border width as uniform (per-side not supported due to varying limit)
-    out.border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w)) * globals.scale;
+    let border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w)) * globals.scale;
     out.shadow_color_packed = pack_color_to_u32(premultiply(input.shadow_color));
     out.shadow_offset = input.shadow_offset * globals.scale;
-    out.shadow_blur_radius = input.shadow_blur_radius * globals.scale;
-    out.border_dash = input.border_dash * globals.scale;
+    // Halves keep the varying count at 31: pixel sizes need no more precision.
+    out.border_width_and_blur = pack2x16float(vec2<f32>(border_width, input.shadow_blur_radius * globals.scale));
+    out.border_dash = pack2x16float(input.border_dash * globals.scale);
     
     // Pack gradient_type (bits 0-15) + shadow_inset (bit 16) + border_only (bit 17) into flags
     out.flags = input.gradient_type | (input.flags.x << 16u) | (border_only << 17u);
@@ -342,6 +344,10 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     let gradient_type = input.flags & 0xFFFFu;
     let shadow_inset = bool((input.flags >> 16u) & 1u);
     let border_only = bool((input.flags >> 17u) & 1u);
+    let width_and_blur = unpack2x16float(input.border_width_and_blur);
+    let border_width = width_and_blur.x;
+    let shadow_blur_radius = width_and_blur.y;
+    let border_dash = unpack2x16float(input.border_dash);
     
     // Unpack colors from u32
     let border_color = unpack_u32_to_color(input.border_color_packed);
@@ -386,10 +392,10 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     let clip_a = layer_clip_alpha(input.position.xy);
 
     // Handle border_only mode: gradient fills only the border region
-    if (border_only && input.border_width > 0.0) {
+    if (border_only && border_width > 0.0) {
         // dist is negative inside the quad, positive outside
         // Calculate inner boundary distance (where interior starts)
-        let inner_dist = dist + input.border_width;
+        let inner_dist = dist + border_width;
         
         // outer_alpha: 1.0 inside quad edge, 0.0 outside  
         // This fades in as we cross the outer boundary (dist goes from positive to negative)
@@ -404,17 +410,17 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         // outer_alpha = 1, inner_alpha = 0 → border_alpha = 1
         // outer_alpha = 1, inner_alpha = 1 → border_alpha = 0 (interior - hidden)
         let border_alpha = outer_alpha * (1.0 - inner_alpha)
-            * dash_coverage(input.position.xy, pos, scale, input.border_radius, input.border_dash);
+            * dash_coverage(input.position.xy, pos, scale, input.border_radius, border_dash);
         
         return mixed_color * border_alpha * clip_a;
     }
 
-    if (input.border_width > 0.0) {
+    if (border_width > 0.0) {
         mixed_color = mix(
             mixed_color,
             border_color,
-            clamp(0.5 + dist + input.border_width, 0.0, 1.0)
-                * dash_coverage(input.position.xy, pos, scale, input.border_radius, input.border_dash)
+            clamp(0.5 + dist + border_width, 0.0, 1.0)
+                * dash_coverage(input.position.xy, pos, scale, input.border_radius, border_dash)
         );
     }
 
@@ -431,7 +437,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
                 input.border_radius * 2.0
             ) / 2.0;
             // Invert the distance for inset effect
-            let inset_alpha = 1.0 - smoothstep(-input.shadow_blur_radius, input.shadow_blur_radius, max(-inset_shadow_dist, 0.0));
+            let inset_alpha = 1.0 - smoothstep(-shadow_blur_radius, shadow_blur_radius, max(-inset_shadow_dist, 0.0));
             // Only apply shadow inside the quad (where quad_alpha > 0)
             return mix(quad_color, shadow_color * quad_alpha, inset_alpha * quad_alpha) * clip_a;
         } else {
@@ -441,7 +447,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
                 scale,
                 input.border_radius * 2.0
             ) / 2.0;
-            let shadow_alpha = 1.0 - smoothstep(-input.shadow_blur_radius, input.shadow_blur_radius, max(shadow_dist, 0.0));
+            let shadow_alpha = 1.0 - smoothstep(-shadow_blur_radius, shadow_blur_radius, max(shadow_dist, 0.0));
 
             return mix(quad_color, shadow_color, (1.0 - quad_alpha) * shadow_alpha) * clip_a;
         }

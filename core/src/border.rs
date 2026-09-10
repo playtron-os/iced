@@ -33,14 +33,21 @@ pub struct Dash {
 }
 
 impl Dash {
-    /// What a CSS `dashed` border of `width` draws: dashes and gaps three
-    /// times the width, and never shorter than three pixels, so a hairline
-    /// still reads as dashed rather than dotted.
+    /// What Chromium draws for a CSS `dashed` border of `width`: a line under
+    /// a pixel paints as one, a thin line dashes three widths on and two off,
+    /// a thick one two on and one off.
     pub fn css(width: impl Into<Pixels>) -> Self {
-        let length = (width.into().0 * 3.0).max(3.0);
-        Self {
-            on: length,
-            off: length,
+        let thickness = width.into().0.max(1.0);
+        if thickness < 3.0 {
+            Self {
+                on: thickness * 3.0,
+                off: thickness * 2.0,
+            }
+        } else {
+            Self {
+                on: thickness * 2.0,
+                off: thickness,
+            }
         }
     }
 
@@ -210,9 +217,13 @@ mod dash_tests {
     use super::*;
 
     #[test]
-    fn a_css_dash_is_three_widths_and_never_under_three_pixels() {
-        assert_eq!(Dash::css(2.0), Dash { on: 6.0, off: 6.0 });
-        assert_eq!(Dash::css(0.5), Dash { on: 3.0, off: 3.0 });
+    fn a_css_dash_follows_the_browsers_thin_and_thick_rules() {
+        // Measured off Chromium: 0.5px and 1px give 3 on / 2 off, 2px gives
+        // 6 / 4, and from 3px the dash is two widths and the gap one.
+        assert_eq!(Dash::css(0.5), Dash { on: 3.0, off: 2.0 });
+        assert_eq!(Dash::css(1.0), Dash { on: 3.0, off: 2.0 });
+        assert_eq!(Dash::css(2.0), Dash { on: 6.0, off: 4.0 });
+        assert_eq!(Dash::css(3.0), Dash { on: 6.0, off: 3.0 });
     }
 
     #[test]
