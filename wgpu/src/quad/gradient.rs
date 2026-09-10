@@ -190,6 +190,12 @@ impl Pipeline {
                             offset: 204,
                             shader_location: 12,
                         },
+                        // Border dash [on, off] (offset 220)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 220,
+                            shader_location: 13,
+                        },
                     ],
                     // Native has full 8 gradient stops with all fields
                     // Use explicit offsets to match the Gradient struct layout
@@ -290,6 +296,12 @@ impl Pipeline {
                             format: wgpu::VertexFormat::Uint32x4,
                             offset: 204,
                             shader_location: 15,
+                        },
+                        // Border dash [on, off] (offset 220)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 220,
+                            shader_location: 16,
                         },
                     ],
                 }],

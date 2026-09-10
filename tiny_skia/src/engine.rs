@@ -294,6 +294,7 @@ impl Engine {
                         },
                         &tiny_skia::Stroke {
                             width: border_width,
+                            dash: stroke_dash(&quad.border),
                             ..tiny_skia::Stroke::default()
                         },
                         transform,
@@ -337,6 +338,7 @@ impl Engine {
                         },
                         &tiny_skia::Stroke {
                             width: border_width,
+                            dash: stroke_dash(&quad.border),
                             ..tiny_skia::Stroke::default()
                         },
                         transform,
@@ -809,6 +811,12 @@ fn into_transform(transformation: Transformation) -> tiny_skia::Transform {
         tx: translation.x,
         ty: translation.y,
     }
+}
+
+/// The border's dash pattern as a stroke dash, when it has one.
+fn stroke_dash(border: &crate::core::Border) -> Option<tiny_skia::StrokeDash> {
+    let dash = border.dash?;
+    tiny_skia::StrokeDash::new(vec![dash.on, dash.off], 0.0)
 }
 
 fn rounded_rectangle(bounds: Rectangle, border_radius: [f32; 4]) -> tiny_skia::Path {

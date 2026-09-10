@@ -76,6 +76,9 @@ pub struct Quad {
     /// Whether only the border should be rendered (gradient fills border only, not interior).
     /// Only applies to gradient quads.
     pub border_only: u32,
+
+    /// The border's dash pattern [on, off]; zero draws it solid.
+    pub border_dash: [f32; 2],
 }
 
 #[derive(Debug, Clone)]

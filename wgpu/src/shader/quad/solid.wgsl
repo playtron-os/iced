@@ -12,6 +12,8 @@ struct SolidVertexInput {
     @location(9) shadow_inset: u32,
     @location(10) shadow_spread_radius: f32,
     @location(11) snap: u32,
+    @location(12) border_only: u32,
+    @location(13) border_dash: vec2<f32>,
 }
 
 struct SolidVertexOutput {
@@ -27,6 +29,7 @@ struct SolidVertexOutput {
     @location(8) shadow_blur_radius: f32,
     @location(9) @interpolate(flat) shadow_inset: u32,
     @location(10) shadow_spread_radius: f32,
+    @location(11) border_dash: vec2<f32>,
 }
 
 @vertex
@@ -76,6 +79,7 @@ fn solid_vs_main(input: SolidVertexInput) -> SolidVertexOutput {
     out.shadow_blur_radius = input.shadow_blur_radius * globals.scale;
     out.shadow_inset = input.shadow_inset;
     out.shadow_spread_radius = input.shadow_spread_radius * globals.scale;
+    out.border_dash = input.border_dash * globals.scale;
 
     return out;
 }
@@ -95,6 +99,9 @@ fn solid_fs_main(
     let max_border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w));
 
     if (max_border_width > 0.0) {
+        // A dashed border shows the fill in its gaps.
+        let dash = dash_coverage(input.position.xy, input.pos, input.scale, input.border_radius, input.border_dash);
+
         // Check if all sides are equal (uniform border - use original SDF approach)
         let all_equal = input.border_widths.x == input.border_widths.y
             && input.border_widths.y == input.border_widths.z
@@ -104,7 +111,7 @@ fn solid_fs_main(
             mixed_color = mix(
                 input.color,
                 input.border_color,
-                clamp(0.5 + dist + input.border_widths.x, 0.0, 1.0)
+                clamp(0.5 + dist + input.border_widths.x, 0.0, 1.0) * dash
             );
         } else {
             // Per-side border using inner rounded rect SDF.
@@ -137,7 +144,7 @@ fn solid_fs_main(
             let inner_coverage = clamp(0.5 - inner_dist, 0.0, 1.0);
             let border_factor = max(0.0, outer_coverage - inner_coverage) / max(outer_coverage, 0.001);
 
-            mixed_color = mix(input.color, input.border_color, border_factor);
+            mixed_color = mix(input.color, input.border_color, border_factor * dash);
         }
     }
 

@@ -17,6 +17,37 @@ pub struct Border {
     /// When `None` (default), all sides use `self.width`.
     /// When `Some`, each side uses its own value.
     pub sides: Option<[f32; 4]>,
+
+    /// The dash pattern the line is drawn with. `None` (default) draws it solid.
+    pub dash: Option<Dash>,
+}
+
+/// A dash pattern: `on` pixels of line, then `off` pixels of gap, repeated
+/// along the border's outline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Dash {
+    /// The length of each dash.
+    pub on: f32,
+    /// The gap after each dash.
+    pub off: f32,
+}
+
+impl Dash {
+    /// What a CSS `dashed` border of `width` draws: dashes and gaps three
+    /// times the width, and never shorter than three pixels, so a hairline
+    /// still reads as dashed rather than dotted.
+    pub fn css(width: impl Into<Pixels>) -> Self {
+        let length = (width.into().0 * 3.0).max(3.0);
+        Self {
+            on: length,
+            off: length,
+        }
+    }
+
+    /// The pattern's period.
+    pub fn period(self) -> f32 {
+        self.on + self.off
+    }
 }
 
 /// Creates a new [`Border`] with the given [`Radius`].
@@ -80,6 +111,25 @@ impl Border {
         }
     }
 
+    /// Draws the [`Border`] as dashes of `on` pixels with `off`-pixel gaps.
+    pub fn dashed(self, on: impl Into<Pixels>, off: impl Into<Pixels>) -> Self {
+        Self {
+            dash: Some(Dash {
+                on: on.into().0,
+                off: off.into().0,
+            }),
+            ..self
+        }
+    }
+
+    /// Draws the [`Border`] the way CSS `dashed` would at its width.
+    pub fn dashed_css(self) -> Self {
+        Self {
+            dash: Some(Dash::css(self.width)),
+            ..self
+        }
+    }
+
     /// Sets the top border width.
     pub fn top(mut self, width: impl Into<Pixels>) -> Self {
         let sides = self.sides.get_or_insert([self.width; 4]);
@@ -129,12 +179,56 @@ impl Border {
             Some(std::array::from_fn(|i| lerp(from[i], to[i])))
         };
 
+        // A pattern is not a continuous quantity; it holds until the far end
+        // has one of its own.
+        let dash = match (self.dash, other.dash) {
+            (Some(from), Some(to)) => Some(Dash {
+                on: lerp(from.on, to.on),
+                off: lerp(from.off, to.off),
+            }),
+            (from, to) => {
+                if amount < 0.5 {
+                    from
+                } else {
+                    to
+                }
+            }
+        };
+
         Self {
             color: self.color.lerp(other.color, amount),
             width: lerp(self.width, other.width),
             radius: self.radius.lerp(other.radius, amount),
             sides,
+            dash,
         }
+    }
+}
+
+#[cfg(test)]
+mod dash_tests {
+    use super::*;
+
+    #[test]
+    fn a_css_dash_is_three_widths_and_never_under_three_pixels() {
+        assert_eq!(Dash::css(2.0), Dash { on: 6.0, off: 6.0 });
+        assert_eq!(Dash::css(0.5), Dash { on: 3.0, off: 3.0 });
+    }
+
+    #[test]
+    fn a_border_stays_solid_until_it_is_asked_to_dash() {
+        assert_eq!(Border::default().dash, None);
+        let dashed = Border::default().width(1).dashed(4, 2);
+        assert_eq!(dashed.dash, Some(Dash { on: 4.0, off: 2.0 }));
+        assert_eq!(dashed.dash.map(Dash::period), Some(6.0));
+    }
+
+    #[test]
+    fn a_tween_keeps_the_pattern_of_its_nearer_end() {
+        let solid = Border::default();
+        let dashed = Border::default().dashed(3, 3);
+        assert_eq!(solid.lerp(dashed, 0.25).dash, None);
+        assert_eq!(solid.lerp(dashed, 0.75).dash, dashed.dash);
     }
 }
 

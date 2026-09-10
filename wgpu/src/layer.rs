@@ -530,6 +530,10 @@ fn to_gpu_quad(quad: renderer::Quad, transformation: Transformation) -> Quad {
         shadow_spread_radius: quad.shadow.spread_radius * transformation.scale_factor(),
         snap: quad.snap as u32,
         border_only: quad.border_only as u32,
+        border_dash: quad.border.dash.map_or([0.0; 2], |dash| {
+            let s = transformation.scale_factor();
+            [dash.on * s, dash.off * s]
+        }),
     }
 }
 

@@ -17,6 +17,7 @@ struct GradientVertexInput {
     @location(14) shadow_blur_radius: f32,
     // Packed: x = shadow_inset, y = shadow_spread_radius (bitcast to f32), z = snap, w = border_only
     @location(15) flags: vec4<u32>,
+    @location(16) border_dash: vec2<f32>,
 }
 
 struct GradientVertexOutput {
@@ -38,6 +39,7 @@ struct GradientVertexOutput {
     @location(13) shadow_blur_and_spread: vec2<f32>,
     @location(14) @interpolate(flat) shadow_inset: u32,
     @location(15) @interpolate(flat) border_only: u32,
+    @location(16) border_dash: vec2<f32>,
 }
 
 @vertex
@@ -110,6 +112,7 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.shadow_blur_and_spread = vec2<f32>(input.shadow_blur_radius * globals.scale, shadow_spread_radius * globals.scale);
     out.shadow_inset = input.flags.x;
     out.border_only = input.flags.w;
+    out.border_dash = input.border_dash * globals.scale;
 
     return out;
 }
@@ -345,6 +348,9 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     // Trim every output path to the layer's rounded clip.
     let clip_a = layer_clip_alpha(input.position.xy);
 
+    // A dashed border shows the fill (or nothing, in border-only mode) in its gaps.
+    let dash = dash_coverage(input.position.xy, pos, scale, input.border_radius, input.border_dash);
+
     // Handle border_only mode: gradient fills only the border region
     let max_border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w));
     if (bool(input.border_only) && max_border_width > 0.0) {
@@ -366,7 +372,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         // outer_alpha = 1, inner_alpha = 1 → border_alpha = 0 (interior - hidden)
         let border_alpha = outer_alpha * (1.0 - inner_alpha);
         
-        return mixed_color * border_alpha * clip_a;
+        return mixed_color * border_alpha * dash * clip_a;
     }
 
     if (max_border_width > 0.0) {
@@ -379,7 +385,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
             mixed_color = mix(
                 mixed_color,
                 input.border_color,
-                clamp(0.5 + dist + input.border_widths.x, 0.0, 1.0)
+                clamp(0.5 + dist + input.border_widths.x, 0.0, 1.0) * dash
             );
         } else {
             // Per-side border using inner rounded rect SDF.
@@ -412,7 +418,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
             let inner_coverage = clamp(0.5 - inner_dist, 0.0, 1.0);
             let border_factor = max(0.0, outer_coverage - inner_coverage) / max(outer_coverage, 0.001);
 
-            mixed_color = mix(mixed_color, input.border_color, border_factor);
+            mixed_color = mix(mixed_color, input.border_color, border_factor * dash);
         }
     }
 

@@ -115,6 +115,10 @@ impl Pipeline {
                         10 => Float32,
                         // Snap
                         11 => Uint32,
+                        // Border only (unused by the solid pipeline)
+                        12 => Uint32,
+                        // Border dash [on, off]
+                        13 => Float32x2,
                     ),
                 }],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
