@@ -279,29 +279,24 @@ impl Pipeline {
                             offset: 176,
                             shader_location: 12,
                         },
-                        // Shadow offset (offset 192)
+                        // Shadow offset + blur radius (offset 192): one attribute, since
+                        // a vertex shader gets 16 and the dash needs the last one.
                         wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
+                            format: wgpu::VertexFormat::Float32x3,
                             offset: 192,
                             shader_location: 13,
-                        },
-                        // Shadow blur radius (offset 200)
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 200,
-                            shader_location: 14,
                         },
                         // Shadow inset + spread_radius(f32 bits) + snap + border_only (offset 204)
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Uint32x4,
                             offset: 204,
-                            shader_location: 15,
+                            shader_location: 14,
                         },
                         // Border dash [on, off] (offset 220)
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x2,
                             offset: 220,
-                            shader_location: 16,
+                            shader_location: 15,
                         },
                     ],
                 }],

@@ -13,11 +13,11 @@ struct GradientVertexInput {
     @location(10) border_radius: vec4<f32>,
     @location(11) border_widths: vec4<f32>,
     @location(12) shadow_color: vec4<f32>,
-    @location(13) shadow_offset: vec2<f32>,
-    @location(14) shadow_blur_radius: f32,
+    // Packed: xy = shadow_offset, z = shadow_blur_radius
+    @location(13) shadow: vec3<f32>,
     // Packed: x = shadow_inset, y = shadow_spread_radius (bitcast to f32), z = snap, w = border_only
-    @location(15) flags: vec4<u32>,
-    @location(16) border_dash: vec2<f32>,
+    @location(14) flags: vec4<u32>,
+    @location(15) border_dash: vec2<f32>,
 }
 
 struct GradientVertexOutput {
@@ -35,11 +35,10 @@ struct GradientVertexOutput {
     @location(10) border_widths: vec4<f32>,
     @location(11) shadow_color: vec4<f32>,
     @location(12) shadow_offset: vec2<f32>,
-    // Packed: x = shadow_blur_radius, y = shadow_spread_radius
-    @location(13) shadow_blur_and_spread: vec2<f32>,
+    // Packed: x = shadow_blur_radius, y = shadow_spread_radius, zw = border dash
+    @location(13) shadow_blur_spread_dash: vec4<f32>,
     @location(14) @interpolate(flat) shadow_inset: u32,
     @location(15) @interpolate(flat) border_only: u32,
-    @location(16) border_dash: vec2<f32>,
 }
 
 @vertex
@@ -55,13 +54,13 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     // For inset shadows, no expansion needed
     var shadow_expand = vec2<f32>(0.0, 0.0);
     if !shadow_inset {
-        shadow_expand = min(input.shadow_offset, vec2<f32>(0.0, 0.0)) - input.shadow_blur_radius - max(shadow_spread_radius, 0.0);
+        shadow_expand = min(input.shadow.xy, vec2<f32>(0.0, 0.0)) - input.shadow.z - max(shadow_spread_radius, 0.0);
     }
 
     var pos: vec2<f32> = (input.position_and_scale.xy + shadow_expand) * globals.scale;
     var scale_expand = vec2<f32>(0.0, 0.0);
     if !shadow_inset {
-        scale_expand = vec2<f32>(abs(input.shadow_offset.x), abs(input.shadow_offset.y)) + (input.shadow_blur_radius + max(shadow_spread_radius, 0.0)) * 2.0;
+        scale_expand = vec2<f32>(abs(input.shadow.xy.x), abs(input.shadow.xy.y)) + (input.shadow.z + max(shadow_spread_radius, 0.0)) * 2.0;
     }
     var scale: vec2<f32> = (input.position_and_scale.zw + scale_expand) * globals.scale;
 
@@ -108,11 +107,14 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.border_radius = border_radius * globals.scale;
     out.border_widths = input.border_widths * globals.scale;
     out.shadow_color = premultiply(input.shadow_color);
-    out.shadow_offset = input.shadow_offset * globals.scale;
-    out.shadow_blur_and_spread = vec2<f32>(input.shadow_blur_radius * globals.scale, shadow_spread_radius * globals.scale);
+    out.shadow_offset = input.shadow.xy * globals.scale;
+    out.shadow_blur_spread_dash = vec4<f32>(
+        input.shadow.z * globals.scale,
+        shadow_spread_radius * globals.scale,
+        input.border_dash * globals.scale
+    );
     out.shadow_inset = input.flags.x;
     out.border_only = input.flags.w;
-    out.border_dash = input.border_dash * globals.scale;
 
     return out;
 }
@@ -349,7 +351,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     let clip_a = layer_clip_alpha(input.position.xy);
 
     // A dashed border shows the fill (or nothing, in border-only mode) in its gaps.
-    let dash = dash_coverage(input.position.xy, pos, scale, input.border_radius, input.border_dash);
+    let dash = dash_coverage(input.position.xy, pos, scale, input.border_radius, input.shadow_blur_spread_dash.zw);
 
     // Handle border_only mode: gradient fills only the border region
     let max_border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w));
@@ -427,14 +429,14 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     let quad_color = mixed_color * quad_alpha;
 
     if input.shadow_color.a > 0.0 {
-        let blur = input.shadow_blur_and_spread.x;
-        let spread = input.shadow_blur_and_spread.y;
+        let blur = input.shadow_blur_spread_dash.x;
+        let spread = input.shadow_blur_spread_dash.y;
 
         if bool(input.shadow_inset) {
             // Inset shadow - draw inside the quad
             // Spread contracts the inset shadow shape (positive spread = larger shadow area inside)
             var inset_shadow_dist: f32 = rounded_box_sdf(
-                -(input.position.xy - pos - input.shadow_offset - scale/2.0) * 2.0,
+                -(input.position.xy - pos - input.shadow.xy - scale/2.0) * 2.0,
                 scale - vec2(spread * 2.0),
                 max(input.border_radius * 2.0 - vec4(spread * 2.0), vec4(0.0))
             ) / 2.0;
@@ -446,7 +448,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
             // Outset shadow - draw outside the quad
             // Spread expands the shadow shape (positive = larger shadow, negative = smaller)
             var shadow_dist: f32 = rounded_box_sdf(
-                -(input.position.xy - pos - input.shadow_offset - scale/2.0) * 2.0,
+                -(input.position.xy - pos - input.shadow.xy - scale/2.0) * 2.0,
                 scale + vec2(spread * 2.0),
                 max(input.border_radius * 2.0 + vec4(spread * 2.0), vec4(0.0))
             ) / 2.0;

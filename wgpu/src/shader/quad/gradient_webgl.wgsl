@@ -23,6 +23,7 @@ struct GradientVertexInput {
     @location(11) shadow_blur_radius: f32,
     // Packed: x = shadow_inset, y = snap, z = border_only, w = padding
     @location(12) flags: vec4<u32>,
+    @location(13) border_dash: vec2<f32>,
 }
 
 // Reduced output struct for WebGL2 compatibility (max 31 inter-stage components)
@@ -43,6 +44,7 @@ struct GradientVertexOutput {
     @location(9) shadow_offset: vec2<f32>,                      // 2 components
     @location(10) shadow_blur_radius: f32,                      // 1 component
     @location(11) @interpolate(flat) flags: u32,               // 1 component (gradient_type + shadow_inset + border_only)
+    @location(12) border_dash: vec2<f32>,                       // 2 components
 }
 
 // Pack a vec4<f32> color (0.0-1.0) into a single u32 (RGBA8)
@@ -136,6 +138,7 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.shadow_color_packed = pack_color_to_u32(premultiply(input.shadow_color));
     out.shadow_offset = input.shadow_offset * globals.scale;
     out.shadow_blur_radius = input.shadow_blur_radius * globals.scale;
+    out.border_dash = input.border_dash * globals.scale;
     
     // Pack gradient_type (bits 0-15) + shadow_inset (bit 16) + border_only (bit 17) into flags
     out.flags = input.gradient_type | (input.flags.x << 16u) | (border_only << 17u);
@@ -400,7 +403,8 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         // Border region is inside the outer edge but outside the inner edge
         // outer_alpha = 1, inner_alpha = 0 → border_alpha = 1
         // outer_alpha = 1, inner_alpha = 1 → border_alpha = 0 (interior - hidden)
-        let border_alpha = outer_alpha * (1.0 - inner_alpha);
+        let border_alpha = outer_alpha * (1.0 - inner_alpha)
+            * dash_coverage(input.position.xy, pos, scale, input.border_radius, input.border_dash);
         
         return mixed_color * border_alpha * clip_a;
     }
@@ -410,6 +414,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
             mixed_color,
             border_color,
             clamp(0.5 + dist + input.border_width, 0.0, 1.0)
+                * dash_coverage(input.position.xy, pos, scale, input.border_radius, input.border_dash)
         );
     }
 
