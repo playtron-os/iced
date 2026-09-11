@@ -17,6 +17,49 @@ fn rounded_box_sdf(p: vec2<f32>, size: vec2<f32>, corners: vec4<f32>) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - corner;
 }
 
+fn edge_coverage(distance: f32) -> f32 {
+    return clamp(0.5 - distance, 0.0, 1.0);
+}
+
+// The inner and outer edges partition a pixel; their coverages are correlated.
+// Multiplying outer * (1 - inner) overcounts a subpixel stroke, changing its
+// weight as a corner crosses the pixel grid. Normalize only for the material
+// mix: the caller applies the outer shape's coverage exactly once afterwards.
+fn stroke_coverage(outer_distance: f32, inner_distance: f32) -> f32 {
+    return max(edge_coverage(outer_distance) - edge_coverage(inner_distance), 0.0);
+}
+
+fn border_fraction(outer_distance: f32, inner_distance: f32) -> f32 {
+    return stroke_coverage(outer_distance, inner_distance) / max(edge_coverage(outer_distance), 0.001);
+}
+
+// Both materials are premultiplied, but not yet masked by the quad's edge.
+// An inset shadow/highlight goes OVER the fill; interpolating towards its RGBA
+// instead would replace opaque artwork with a translucent band. Apply the
+// shared shape mask once, so an opaque tile retains its antialiased silhouette.
+fn inset_shadow_over(fill: vec4<f32>, shadow: vec4<f32>, outer_distance: f32, hole_distance: f32, blur: f32) -> vec4<f32> {
+    let outer = edge_coverage(outer_distance);
+    var band: f32;
+    if blur <= 0.0 {
+        // A sharp inset is the part of the body outside the translated hole.
+        // In particular, coincident edges cancel rather than casting a halo.
+        band = stroke_coverage(outer_distance, hole_distance);
+    } else {
+        // Retain at least a physical pixel of AA at the blurred hole boundary.
+        let extent = max(blur, 0.5);
+        band = outer * smoothstep(-extent, extent, hole_distance);
+    }
+    return fill * outer + (shadow - fill * shadow.a) * band;
+}
+
+fn outset_shadow_alpha(distance: f32, blur: f32) -> f32 {
+    // smoothstep with equal edges is undefined (not a hard-edged shadow).
+    if blur <= 0.0 {
+        return edge_coverage(distance);
+    }
+    return 1.0 - smoothstep(-blur, blur, max(distance, 0.0));
+}
+
 // Coverage (1 = keep, 0 = discard) of a fragment under the layer's rounded
 // clip, with the same AA convention as the quad fill so trimmed corners stay
 // smooth. `frag_pos` is the fragment's physical-pixel position.

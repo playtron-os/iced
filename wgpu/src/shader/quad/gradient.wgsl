@@ -356,29 +356,12 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     // Handle border_only mode: gradient fills only the border region
     let max_border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w));
     if (bool(input.border_only) && max_border_width > 0.0) {
-        // dist is negative inside the quad, positive outside
-        // Calculate inner boundary distance (where interior starts)
         let inner_dist = dist + max_border_width;
-        
-        // outer_alpha: 1.0 inside quad edge, 0.0 outside  
-        // This fades in as we cross the outer boundary (dist goes from positive to negative)
-        let outer_alpha = clamp(0.5 - dist, 0.0, 1.0);
-        
-        // inner_alpha: 0.0 in border region, 1.0 in interior
-        // When inner_dist < 0 (in border or outside), we want this to be 0
-        // When inner_dist > 0 (in interior), we want this to be 1
-        let inner_alpha = clamp(0.5 - inner_dist, 0.0, 1.0);
-        
-        // Border region is inside the outer edge but outside the inner edge
-        // outer_alpha = 1, inner_alpha = 0 → border_alpha = 1
-        // outer_alpha = 1, inner_alpha = 1 → border_alpha = 0 (interior - hidden)
-        let border_alpha = outer_alpha * (1.0 - inner_alpha);
-        
-        return mixed_color * border_alpha * dash * clip_a;
+        return mixed_color * stroke_coverage(dist, inner_dist) * dash * clip_a;
     }
 
     if (max_border_width > 0.0) {
-        // Check if all sides are equal (uniform border - use original SDF approach)
+        // Uniform borders can reuse the outer distance for their inner edge.
         let all_equal = input.border_widths.x == input.border_widths.y
             && input.border_widths.y == input.border_widths.z
             && input.border_widths.z == input.border_widths.w;
@@ -387,7 +370,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
             mixed_color = mix(
                 mixed_color,
                 input.border_color,
-                clamp(0.5 + dist + input.border_widths.x, 0.0, 1.0) * dash
+                border_fraction(dist, dist + input.border_widths.x) * dash
             );
         } else {
             // Per-side border using inner rounded rect SDF.
@@ -416,11 +399,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
             // Border coverage = fraction of visible pixel in border region.
             // Where inner and outer edges coincide (0-width sides), both coverages
             // cancel out, producing no border artifact.
-            let outer_coverage = clamp(0.5 - dist, 0.0, 1.0);
-            let inner_coverage = clamp(0.5 - inner_dist, 0.0, 1.0);
-            let border_factor = max(0.0, outer_coverage - inner_coverage) / max(outer_coverage, 0.001);
-
-            mixed_color = mix(mixed_color, input.border_color, border_factor * dash);
+            mixed_color = mix(mixed_color, input.border_color, border_fraction(dist, inner_dist) * dash);
         }
     }
 
@@ -440,10 +419,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
                 scale - vec2(spread * 2.0),
                 max(input.border_radius * 2.0 - vec4(spread * 2.0), vec4(0.0))
             ) / 2.0;
-            // Invert the distance for inset effect
-            let inset_alpha = 1.0 - smoothstep(-blur, blur, max(-inset_shadow_dist, 0.0));
-            // Only apply shadow inside the quad (where quad_alpha > 0)
-            return mix(quad_color, input.shadow_color * quad_alpha, inset_alpha * quad_alpha) * clip_a;
+            return inset_shadow_over(mixed_color, input.shadow_color, dist, inset_shadow_dist, blur) * clip_a;
         } else {
             // Outset shadow - draw outside the quad
             // Spread expands the shadow shape (positive = larger shadow, negative = smaller)
@@ -452,7 +428,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
                 scale + vec2(spread * 2.0),
                 max(input.border_radius * 2.0 + vec4(spread * 2.0), vec4(0.0))
             ) / 2.0;
-            let shadow_alpha = 1.0 - smoothstep(-blur, blur, max(shadow_dist, 0.0));
+            let shadow_alpha = outset_shadow_alpha(shadow_dist, blur);
 
             return mix(quad_color, input.shadow_color, (1.0 - quad_alpha) * shadow_alpha) * clip_a;
         }
