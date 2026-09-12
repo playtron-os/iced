@@ -427,6 +427,12 @@ pub struct Span<'a, Link = (), Font = crate::Font> {
     pub link: Option<Link>,
     /// The [`Highlight`] of the [`Span`].
     pub highlight: Option<Highlight>,
+    /// A [`Highlight`] drawn only while this [`Span`] is the hovered link.
+    ///
+    /// Setting it also SUPPRESSES the underline a hovered link is otherwise
+    /// given, so a design that marks a link with a tint rather than a rule can
+    /// say so. `None` leaves the underline exactly as it was.
+    pub hover_highlight: Option<Highlight>,
     /// The [`Padding`] of the [`Span`].
     ///
     /// Currently, it only affects the bounds of the [`Highlight`].
@@ -600,6 +606,7 @@ impl<'a, Link, Font> Span<'a, Link, Font> {
             color: self.color,
             link: self.link,
             highlight: self.highlight,
+            hover_highlight: self.hover_highlight,
             padding: self.padding,
             underline: self.underline,
             strikethrough: self.strikethrough,
@@ -618,6 +625,7 @@ impl<Link, Font> Default for Span<'_, Link, Font> {
             color: None,
             link: None,
             highlight: None,
+            hover_highlight: None,
             padding: Padding::default(),
             underline: false,
             strikethrough: false,

@@ -406,14 +406,24 @@ where
 
         for (index, span) in self.spans.as_ref().as_ref().iter().enumerate() {
             let is_hovered_link = self.on_link_click.is_some() && Some(index) == self.hovered_link;
+            // A hovered link is underlined UNLESS it carries its own hover
+            // highlight, in which case that tint is the affordance and a rule
+            // under it would be a second one.
+            let hover_highlight = is_hovered_link.then_some(span.hover_highlight).flatten();
+            let underline_hovered_link = is_hovered_link && hover_highlight.is_none();
 
-            if span.highlight.is_some() || span.underline || span.strikethrough || is_hovered_link {
+            if span.highlight.is_some()
+                || hover_highlight.is_some()
+                || span.underline
+                || span.strikethrough
+                || is_hovered_link
+            {
                 let translation = layout.position() - Point::ORIGIN;
                 let regions = state.paragraph.span_bounds(index);
                 let layout_width = layout.bounds().width;
                 let is_truncated = state.paragraph.is_truncated();
 
-                if let Some(highlight) = span.highlight {
+                for highlight in span.highlight.into_iter().chain(hover_highlight) {
                     for bounds in &regions {
                         let bounds = Rectangle::new(
                             bounds.position() - Vector::new(span.padding.left, span.padding.top),
@@ -431,7 +441,7 @@ where
                     }
                 }
 
-                if span.underline || span.strikethrough || is_hovered_link {
+                if span.underline || span.strikethrough || underline_hovered_link {
                     let size = span.size.or(self.size).unwrap_or(renderer.default_size());
 
                     let line_height = span
@@ -444,7 +454,7 @@ where
                     let baseline =
                         translation + Vector::new(0.0, size.0 + (line_height.0 - size.0) / 2.0);
 
-                    if span.underline || is_hovered_link {
+                    if span.underline || underline_hovered_link {
                         for bounds in &regions {
                             let width = bounds.width.min(layout_width - bounds.x);
                             if width <= 0.0 {
