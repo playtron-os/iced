@@ -15,6 +15,7 @@ mod backdrop_blur;
 mod column;
 mod focus_order;
 mod gradient_fade;
+mod menu_list;
 mod mouse_area;
 mod opacity;
 mod pin;
@@ -82,6 +83,7 @@ pub use focus_order::{FocusOrder, focus_order};
 pub use gradient_fade::{FadeEdge, GradientFade, gradient_fade};
 #[doc(no_inline)]
 pub use grid::Grid;
+pub use menu_list::{MenuList, menu_list};
 #[doc(no_inline)]
 pub use mouse_area::MouseArea;
 #[doc(no_inline)]
