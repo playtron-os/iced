@@ -147,47 +147,6 @@ fn mark_post_blur_layers(
     rendered[content.start_layer.min(end)..end].fill(true);
 }
 
-#[cfg(test)]
-mod stacked_blur_tests {
-    use super::{content_for_blur_region, mark_post_blur_layers};
-    use crate::{
-        blur::{BackdropBlur, BlurRegion, PostBlurContent},
-        core::Rectangle,
-    };
-
-    fn content(start_layer: usize, end_layer: Option<usize>) -> PostBlurContent {
-        PostBlurContent {
-            bounds: Rectangle::default(),
-            start_layer,
-            end_layer,
-        }
-    }
-
-    #[test]
-    fn a_blur_region_selects_its_smallest_matching_content_range() {
-        let region = BlurRegion {
-            blur: BackdropBlur::new(Rectangle::default(), 20.0),
-            layer_index: 3,
-        };
-        let content = [content(3, Some(10)), content(3, Some(7)), content(8, None)];
-
-        let selected = content_for_blur_region(&region, &content, 12).unwrap();
-
-        assert_eq!(selected.start_layer, 3);
-        assert_eq!(selected.end_layer, Some(7));
-    }
-
-    #[test]
-    fn rendered_post_blur_layers_are_marked_without_exceeding_the_frame() {
-        let mut rendered = vec![false; 6];
-
-        mark_post_blur_layers(&content(2, None), 8, &mut rendered);
-        mark_post_blur_layers(&content(9, Some(12)), 8, &mut rendered);
-
-        assert_eq!(rendered, [false, false, true, true, true, true]);
-    }
-}
-
 impl Renderer {
     pub fn new(engine: Engine, default_font: Font, default_text_size: Pixels) -> Self {
         Self {
@@ -3036,5 +2995,46 @@ impl renderer::Headless for Renderer {
             &Viewport::with_physical_size(size, scale_factor),
             background_color,
         )
+    }
+}
+
+#[cfg(test)]
+mod stacked_blur_tests {
+    use super::{content_for_blur_region, mark_post_blur_layers};
+    use crate::{
+        blur::{BackdropBlur, BlurRegion, PostBlurContent},
+        core::Rectangle,
+    };
+
+    fn content(start_layer: usize, end_layer: Option<usize>) -> PostBlurContent {
+        PostBlurContent {
+            bounds: Rectangle::default(),
+            start_layer,
+            end_layer,
+        }
+    }
+
+    #[test]
+    fn a_blur_region_selects_its_smallest_matching_content_range() {
+        let region = BlurRegion {
+            blur: BackdropBlur::new(Rectangle::default(), 20.0),
+            layer_index: 3,
+        };
+        let content = [content(3, Some(10)), content(3, Some(7)), content(8, None)];
+
+        let selected = content_for_blur_region(&region, &content, 12).unwrap();
+
+        assert_eq!(selected.start_layer, 3);
+        assert_eq!(selected.end_layer, Some(7));
+    }
+
+    #[test]
+    fn rendered_post_blur_layers_are_marked_without_exceeding_the_frame() {
+        let mut rendered = vec![false; 6];
+
+        mark_post_blur_layers(&content(2, None), 8, &mut rendered);
+        mark_post_blur_layers(&content(9, Some(12)), 8, &mut rendered);
+
+        assert_eq!(rendered, [false, false, true, true, true, true]);
     }
 }
