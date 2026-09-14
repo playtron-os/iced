@@ -315,6 +315,95 @@ mod tests {
         menu_list(crate::Space::new(), item_count).highlighted(highlighted)
     }
 
+    #[derive(Debug, Clone, PartialEq)]
+    enum Nav {
+        Highlight(usize),
+        Activate(usize),
+        Dismiss,
+    }
+
+    fn press(named: key::Named, modifiers: keyboard::Modifiers) -> Event {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(named),
+            modified_key: keyboard::Key::Named(named),
+            physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        })
+    }
+
+    /// Feeds one key to a three-item list, returning what it published and
+    /// whether it captured the event.
+    fn feed(highlighted: Option<usize>, event: &Event) -> (Vec<Nav>, bool) {
+        let mut list: MenuList<'_, Nav, (), ()> = menu_list(crate::Space::new(), 3)
+            .highlighted(highlighted)
+            .on_highlight(Nav::Highlight)
+            .on_activate(Nav::Activate)
+            .on_dismiss(Nav::Dismiss);
+
+        let mut tree = Tree::new(&list as &dyn Widget<Nav, (), ()>);
+        let node = layout::Node::new(Size::new(100.0, 100.0));
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+
+        list.update(
+            &mut tree,
+            event,
+            Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &(),
+            &mut shell,
+            &Rectangle::with_size(Size::new(100.0, 100.0)),
+        );
+
+        let captured = shell.is_event_captured();
+        (messages, captured)
+    }
+
+    #[test]
+    fn arrow_down_highlights_the_first_item() {
+        let none = keyboard::Modifiers::empty();
+        assert_eq!(
+            feed(None, &press(key::Named::ArrowDown, none)),
+            (vec![Nav::Highlight(0)], true)
+        );
+    }
+
+    #[test]
+    fn shift_tab_moves_back_and_wraps() {
+        assert_eq!(
+            feed(Some(0), &press(key::Named::Tab, keyboard::Modifiers::SHIFT)),
+            (vec![Nav::Highlight(2)], true)
+        );
+    }
+
+    #[test]
+    fn enter_activates_only_a_highlighted_item() {
+        let none = keyboard::Modifiers::empty();
+        assert_eq!(
+            feed(Some(1), &press(key::Named::Enter, none)),
+            (vec![Nav::Activate(1)], true)
+        );
+        assert_eq!(feed(None, &press(key::Named::Enter, none)), (vec![], false));
+    }
+
+    #[test]
+    fn escape_dismisses() {
+        let none = keyboard::Modifiers::empty();
+        assert_eq!(
+            feed(Some(1), &press(key::Named::Escape, none)),
+            (vec![Nav::Dismiss], true)
+        );
+    }
+
+    #[test]
+    fn other_keys_pass_through_to_the_content() {
+        let none = keyboard::Modifiers::empty();
+        assert_eq!(feed(Some(1), &press(key::Named::F1, none)), (vec![], false));
+    }
+
     #[test]
     fn navigation_starts_at_an_end_when_nothing_is_highlighted() {
         assert_eq!(list(3, None).step(true), Some(0));
