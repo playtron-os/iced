@@ -11,7 +11,7 @@ pub use cosmic_text;
 
 use crate::core::alignment;
 use crate::core::font::{self, Font};
-use crate::core::text::{Alignment, Ellipsis, Shaping, Span, Wrapping};
+use crate::core::text::{ADVANCED_AUTO_SHAPING, Alignment, Ellipsis, Shaping, Span, Wrapping};
 use crate::core::{Color, Pixels, Point, Rectangle, Size, Transformation};
 
 use std::borrow::Cow;
@@ -346,7 +346,7 @@ fn to_align(alignment: Alignment) -> Option<cosmic_text::Align> {
 pub fn to_shaping(shaping: Shaping, text: &str) -> cosmic_text::Shaping {
     match shaping {
         Shaping::Auto => {
-            if text.is_ascii() {
+            if !ADVANCED_AUTO_SHAPING && text.is_ascii() {
                 cosmic_text::Shaping::Basic
             } else {
                 cosmic_text::Shaping::Advanced
@@ -365,8 +365,7 @@ pub fn to_shaping_for_spans<'a, Link>(
 ) -> cosmic_text::Shaping {
     match shaping {
         Shaping::Auto => {
-            let all_ascii = spans.iter().all(|span| span.text.is_ascii());
-            if all_ascii {
+            if !ADVANCED_AUTO_SHAPING && spans.iter().all(|span| span.text.is_ascii()) {
                 cosmic_text::Shaping::Basic
             } else {
                 cosmic_text::Shaping::Advanced
@@ -426,4 +425,33 @@ pub fn hint_factor(_size: Pixels, _scale_factor: Option<f32>) -> Option<f32> {
 pub trait Renderer {
     /// Draws the given [`Raw`] text.
     fn fill_raw(&mut self, raw: Raw);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Run with and without `iced_core/advanced-auto-shaping`.
+    #[test]
+    fn auto_shaping_is_advanced_for_ascii_only_with_the_feature() {
+        let (basic, advanced) = (cosmic_text::Shaping::Basic, cosmic_text::Shaping::Advanced);
+        let ascii = if ADVANCED_AUTO_SHAPING {
+            advanced
+        } else {
+            basic
+        };
+
+        let plain: [Span<'_>; 2] = [Span::new("Move "), Span::new("to Trash")];
+        assert_eq!(to_shaping(Shaping::Auto, "Move to Trash"), ascii);
+        assert_eq!(to_shaping_for_spans(Shaping::Auto, &plain), ascii);
+
+        let curly: [Span<'_>; 2] = [Span::new("can’t "), Span::new("be undone")];
+        assert_eq!(to_shaping(Shaping::Auto, "can’t be undone"), advanced);
+        assert_eq!(to_shaping_for_spans(Shaping::Auto, &curly), advanced);
+
+        assert_eq!(to_shaping(Shaping::Basic, "can’t"), basic);
+        assert_eq!(to_shaping_for_spans(Shaping::Basic, &curly), basic);
+        assert_eq!(to_shaping(Shaping::Advanced, "Trash"), advanced);
+        assert_eq!(to_shaping_for_spans(Shaping::Advanced, &plain), advanced);
+    }
 }
