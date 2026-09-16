@@ -98,8 +98,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let position = input.clip_bounds.xy;
     let scale = input.clip_bounds.zw;
 
+    // Negated like quad.wgsl: rounded_box_sdf picks the left corners for p.x > 0.
     let d = rounded_box_sdf(
-        2.0 * (fragment - position - scale / 2.0),
+        -2.0 * (fragment - position - scale / 2.0),
         scale,
         input.border_radius * 2.0,
     ) / 2.0;
