@@ -144,6 +144,10 @@ pub fn window_attributes(
             if let Some(handle) = &settings.platform_specific.wayland_parent {
                 attributes = attributes.with_wayland_parent(handle.clone());
             }
+
+            if settings.platform_specific.halo_header_overlay {
+                attributes = attributes.with_halo_header_overlay(true);
+            }
         }
     }
 
