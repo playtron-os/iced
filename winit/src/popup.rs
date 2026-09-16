@@ -8,10 +8,13 @@ use crate::core::theme;
 use crate::core::window;
 use crate::graphics::{Compositor, Viewport};
 use crate::program::Program;
+use crate::runtime::platform_specific::wayland::popup as runtime_popup;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ptr::NonNull;
 
+use winit::event::WindowEvent;
+use winit::keyboard::ModifiersState;
 use winit::raw_window_handle;
 
 /// Unique ID for a popup surface within iced.
@@ -120,6 +123,41 @@ where
     pub configured: bool,
     /// Whether a frame has been presented, which maps the popup.
     pub presented: bool,
+    /// Modifiers held while the popup has keyboard focus, if it takes keyboard input.
+    pub modifiers: ModifiersState,
+}
+
+/// The modifiers a keyboard popup holds after `event`: losing focus drops them, as for a window.
+pub fn track_modifiers(held: ModifiersState, event: &WindowEvent) -> ModifiersState {
+    match event {
+        WindowEvent::ModifiersChanged(modifiers) => modifiers.state(),
+        WindowEvent::Focused(false) => ModifiersState::empty(),
+        _ => held,
+    }
+}
+
+/// Popups opted into keyboard input, by iced ID, from their request until they go.
+#[derive(Debug, Default)]
+struct KeyboardOptIns(BTreeSet<window::Id>);
+
+impl KeyboardOptIns {
+    /// Opts popup `iced_id` in or out when it is `known`, as requested or live; returns `known`.
+    fn set(&mut self, iced_id: window::Id, enabled: bool, known: bool) -> bool {
+        if known && enabled {
+            let _ = self.0.insert(iced_id);
+        } else if known {
+            let _ = self.0.remove(&iced_id);
+        }
+        known
+    }
+
+    fn enabled(&self, iced_id: window::Id) -> bool {
+        self.0.contains(&iced_id)
+    }
+
+    fn forget(&mut self, iced_id: window::Id) {
+        let _ = self.0.remove(&iced_id);
+    }
 }
 
 /// Where a popup hangs in its tree.
@@ -205,6 +243,7 @@ where
     entries: BTreeMap<PopupId, Popup<C>>,
     /// Popups asked of winit and not reported back yet.
     requested: BTreeSet<window::Id>,
+    keyboard: KeyboardOptIns,
     _marker: std::marker::PhantomData<P>,
 }
 
@@ -219,6 +258,7 @@ where
         Self {
             entries: BTreeMap::new(),
             requested: BTreeSet::new(),
+            keyboard: KeyboardOptIns::default(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -231,6 +271,24 @@ where
     /// Forget a requested popup winit couldn't create.
     pub fn creation_failed(&mut self, iced_id: window::Id) {
         let _ = self.requested.remove(&iced_id);
+        self.keyboard.forget(iced_id);
+        runtime_popup::forget_keyboard_input(iced_id);
+    }
+
+    /// Opt popup `iced_id` in or out of keyboard input; `false` if it is neither requested nor
+    /// live.
+    pub fn set_keyboard_input(&mut self, iced_id: window::Id, enabled: bool) -> bool {
+        let known = self.requested.contains(&iced_id) || self.find_by_iced_id(iced_id).is_some();
+        self.keyboard.set(iced_id, enabled, known)
+    }
+
+    /// The popup keyed `id`, if it takes keyboard input. By key, not winit ID: keyboard focus can
+    /// reach a popup before its configure.
+    pub fn keyboard_popup_mut(&mut self, id: PopupId) -> Option<&mut Popup<C>> {
+        let keyboard = &self.keyboard;
+        self.entries
+            .get_mut(&id)
+            .filter(|popup| keyboard.enabled(popup.iced_id))
     }
 
     /// Insert a new popup (before it's configured).
@@ -259,6 +317,7 @@ where
                 renderer: None,
                 configured: false,
                 presented: false,
+                modifiers: ModifiersState::empty(),
             },
         );
     }
@@ -317,7 +376,10 @@ where
 
     /// Remove a popup.
     pub fn remove(&mut self, id: PopupId) -> Option<Popup<C>> {
-        self.entries.remove(&id)
+        let removed = self.entries.remove(&id)?;
+        self.keyboard.forget(removed.iced_id);
+        runtime_popup::forget_keyboard_input(removed.iced_id);
+        Some(removed)
     }
 
     /// Find a popup by its iced window ID.
@@ -427,8 +489,53 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ParentError, PopupId, PopupParent, resolve_parent, subtree_leaf_first};
+    use super::{
+        KeyboardOptIns, ParentError, PopupId, PopupParent, resolve_parent, subtree_leaf_first,
+        track_modifiers,
+    };
     use crate::core::window;
+    use winit::event::WindowEvent;
+    use winit::keyboard::ModifiersState;
+
+    #[test]
+    fn keyboard_input_needs_a_requested_or_live_popup() {
+        let mut opt_ins = KeyboardOptIns::default();
+        let id = window::Id::unique();
+        assert!(!opt_ins.set(id, true, false));
+        assert!(!opt_ins.enabled(id));
+    }
+
+    #[test]
+    fn keyboard_opt_in_lasts_until_the_popup_goes() {
+        let mut opt_ins = KeyboardOptIns::default();
+        let (id, other) = (window::Id::unique(), window::Id::unique());
+        assert!(opt_ins.set(id, true, true));
+        assert!(opt_ins.enabled(id));
+        assert!(
+            !opt_ins.enabled(other),
+            "other popups still drop their keys"
+        );
+        assert!(opt_ins.set(id, false, true));
+        assert!(!opt_ins.enabled(id));
+        assert!(opt_ins.set(id, true, true));
+        opt_ins.forget(id);
+        assert!(!opt_ins.enabled(id), "a closed or failed popup forgets it");
+    }
+
+    #[test]
+    fn popup_modifiers_follow_changes_and_drop_with_focus() {
+        let shift = WindowEvent::ModifiersChanged(ModifiersState::SHIFT.into());
+        let held = track_modifiers(ModifiersState::empty(), &shift);
+        assert_eq!(held, ModifiersState::SHIFT);
+        assert_eq!(
+            track_modifiers(held, &WindowEvent::Focused(true)),
+            ModifiersState::SHIFT
+        );
+        assert_eq!(
+            track_modifiers(held, &WindowEvent::Focused(false)),
+            ModifiersState::empty()
+        );
+    }
 
     #[test]
     fn unknown_parent_is_not_found() {

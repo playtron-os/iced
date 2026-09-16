@@ -429,9 +429,12 @@ where
                                 kind: PopupPointerEventKind::Button { button, pressed },
                             });
                         }
-                        // Keyboard and focus events delivered to the popup surface
-                        // itself. Popups are given none, so drop them.
-                        winit::platform::wayland::PopupEvent::Window { .. } => {}
+                        winit::platform::wayland::PopupEvent::Window { id, event } => {
+                            let _ = self.sender.unbounded_send(Event::PopupWindowEvent {
+                                winit_popup_id: id.0,
+                                event,
+                            });
+                        }
                     }
                 }
             }
@@ -815,6 +818,14 @@ enum Event<Message: 'static> {
     PopupPointerEvent {
         winit_popup_id: u64,
         kind: PopupPointerEventKind,
+    },
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+    ))]
+    PopupWindowEvent {
+        winit_popup_id: u64,
+        event: winit::event::WindowEvent,
     },
     EventLoopAwakened(winit::event::Event<Message>),
     Exit,
@@ -1244,6 +1255,32 @@ async fn run_instance<P>(
                         window_manager.iter_mut().find(|(id, _)| *id == root_window)
                     {
                         window.raw.request_redraw();
+                    }
+                }
+            }
+            #[cfg(all(
+                unix,
+                not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+            ))]
+            Event::PopupWindowEvent {
+                winit_popup_id,
+                event,
+            } => {
+                // Dropped unless the popup opted in with `popup::keyboard_input`.
+                if let Some(popup) =
+                    popup_manager.keyboard_popup_mut(popup::PopupId(winit_popup_id))
+                {
+                    popup.modifiers = popup::track_modifiers(popup.modifiers, &event);
+                    let (iced_id, root_window) = (popup.iced_id, popup.root_window);
+
+                    if let Some(event) =
+                        conversion::window_event(event, popup.scale_factor, popup.modifiers)
+                    {
+                        events.push((iced_id, event));
+                    }
+
+                    if let Some(root) = window_manager.get_mut(root_window) {
+                        root.raw.request_redraw();
                     }
                 }
             }
@@ -2183,12 +2220,32 @@ async fn run_instance<P>(
                                         .map(|pos| core::mouse::Cursor::Available(*pos))
                                         .unwrap_or(core::mouse::Cursor::Unavailable);
 
-                                    let (_ui_state, _statuses) = popup_ui.update(
+                                    let (_ui_state, statuses) = popup_ui.update(
                                         &popup_events,
                                         popup_cursor,
                                         renderer,
                                         &mut messages,
                                     );
+
+                                    // A keyboard popup's keys and focus reach subscriptions
+                                    // under its own ID, as a window's do; pointer input stays
+                                    // with its widgets.
+                                    for (event, status) in popup_events.into_iter().zip(statuses) {
+                                        if matches!(
+                                            event,
+                                            core::Event::Keyboard(_)
+                                                | core::Event::Window(
+                                                    core::window::Event::Focused
+                                                        | core::window::Event::Unfocused
+                                                )
+                                        ) {
+                                            runtime.broadcast(subscription::Event::Interaction {
+                                                window: iced_id,
+                                                event,
+                                                status,
+                                            });
+                                        }
+                                    }
 
                                     // Cache the UI for rendering
                                     let cache = popup_ui.into_cache();
@@ -3417,6 +3474,11 @@ fn run_action<'a, P, C>(
                                     })
                                     .expect("Send control action");
                                 popup_manager.request(settings.id);
+                                // The app's opt-in, taken as the popup is asked for.
+                                let _ = popup_manager.set_keyboard_input(
+                                    settings.id,
+                                    popup::takes_keyboard_input(settings.id),
+                                );
 
                                 *is_window_opening = true;
                             }

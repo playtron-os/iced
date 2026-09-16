@@ -6,8 +6,10 @@
 use iced_core::Rectangle;
 use iced_core::layout::Limits;
 use iced_core::window::Id;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::sync::{Mutex, PoisonError};
 
 /// Anchor position on the parent surface for popup positioning.
 ///
@@ -329,4 +331,42 @@ pub fn reposition<Message>(id: Id, positioner: Positioner) -> Task<Message> {
             positioner,
         })),
     ))
+}
+
+/// Popups that take keyboard input, by ID.
+///
+/// A register rather than a [`PopupSettings`] field or an [`Action`] variant: backends match that
+/// enum and apps build that struct field by field, so either would stop them compiling.
+static KEYBOARD_INPUT: Mutex<BTreeSet<Id>> = Mutex::new(BTreeSet::new());
+
+/// Deliver or drop the keyboard input of the popup `id`, which is dropped by default.
+///
+/// Delivered, the popup's key presses, modifiers and focus changes reach its widgets, and
+/// subscriptions under its own ID, while the compositor gives it keyboard focus (a grabbing
+/// popup, on most). Set it before [`show`]; only `iced_winit` reads it.
+pub fn keyboard_input(id: Id, enabled: bool) {
+    let mut popups = KEYBOARD_INPUT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let _ = if enabled {
+        popups.insert(id)
+    } else {
+        popups.remove(&id)
+    };
+}
+
+/// Whether the popup `id` takes keyboard input; a backend asks as it creates the popup.
+pub fn takes_keyboard_input(id: Id) -> bool {
+    KEYBOARD_INPUT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(&id)
+}
+
+/// Forget the popup `id`'s keyboard input; a backend drops it with the popup.
+pub fn forget_keyboard_input(id: Id) {
+    let _ = KEYBOARD_INPUT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(&id);
 }
