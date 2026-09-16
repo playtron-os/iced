@@ -88,6 +88,12 @@ pub mod constraint_adjustment {
 #[derive(Debug, Clone)]
 pub struct PopupSettings {
     /// ID of the parent surface (must exist)
+    ///
+    /// Only `iced_winit` also takes a popup here, to nest under; other backends need a window.
+    /// The parent popup must have been drawn, or the new popup is reported closed at once.
+    /// Nested popups should use `grab: false`: xdg-shell only lets a popup grab under the topmost
+    /// grab, so a grab is dropped otherwise. `positioner.anchor_rect` is relative to the parent
+    /// popup, and hiding or replacing a popup closes the popups nested under it first.
     pub parent: Id,
     /// Unique ID for this popup
     pub id: Id,
@@ -286,7 +292,7 @@ use crate::task;
 
 /// Show a popup surface.
 ///
-/// The popup will be positioned relative to the parent window using
+/// The popup will be positioned relative to the parent surface using
 /// the positioner settings.
 pub fn show<Message>(settings: PopupSettings) -> Task<Message> {
     task::effect(crate::Action::PlatformSpecific(

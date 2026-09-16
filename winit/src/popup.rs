@@ -9,7 +9,7 @@ use crate::core::window;
 use crate::graphics::{Compositor, Viewport};
 use crate::program::Program;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ptr::NonNull;
 
 use winit::raw_window_handle;
@@ -94,8 +94,12 @@ where
     pub id: PopupId,
     /// The popup's iced window ID (used for view lookup).
     pub iced_id: window::Id,
-    /// Parent window ID.
+    /// Direct parent's ID: a toplevel window, or the popup in `parent_popup`.
     pub parent_id: window::Id,
+    /// The toplevel this popup's tree hangs off; it renders, scales and redraws the popup.
+    pub root_window: window::Id,
+    /// The popup this one is parented to, if not a toplevel.
+    pub parent_popup: Option<PopupId>,
     /// The winit popup ID, once the compositor has configured the popup.
     ///
     /// `None` between `PopupCreated` and `PopupConfigured`, when the xdg_popup
@@ -104,7 +108,7 @@ where
     pub winit_popup_id: Option<u64>,
     /// Size of the popup.
     pub size: Size<u32>,
-    /// Scale factor (inherited from parent).
+    /// Scale factor (inherited from the root window).
     pub scale_factor: f32,
     /// Viewport for rendering.
     pub viewport: Option<Viewport>,
@@ -114,6 +118,81 @@ where
     pub renderer: Option<C::Renderer>,
     /// Whether the popup has been configured by the compositor.
     pub configured: bool,
+    /// Whether a frame has been presented, which maps the popup.
+    pub presented: bool,
+}
+
+/// Where a popup hangs in its tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PopupParent {
+    /// The direct parent's ID: a toplevel window, or the popup in `popup`.
+    pub id: window::Id,
+    /// The toplevel at the root of the tree.
+    pub root_window: window::Id,
+    /// The parent popup, if `id` isn't a toplevel.
+    pub popup: Option<PopupId>,
+}
+
+impl PopupParent {
+    /// A toplevel parent, which is its own root.
+    pub fn window(id: window::Id) -> Self {
+        Self {
+            id,
+            root_window: id,
+            popup: None,
+        }
+    }
+}
+
+/// Why a popup can't be parented to another popup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentError {
+    /// No popup has that ID, nor is one being created with it.
+    NotFound,
+    /// Not drawn yet, so not mapped; xdg-shell needs a mapped parent.
+    NotMapped,
+}
+
+/// Resolves popup `iced_id` as a parent: `found` is its `(key, root window, presented)` when the
+/// manager has it, `requested` whether its creation is still in flight.
+fn resolve_parent(
+    iced_id: window::Id,
+    found: Option<(PopupId, window::Id, bool)>,
+    requested: bool,
+) -> Result<PopupParent, ParentError> {
+    match found {
+        Some((popup, root_window, true)) => Ok(PopupParent {
+            id: iced_id,
+            root_window,
+            popup: Some(popup),
+        }),
+        Some(_) => Err(ParentError::NotMapped),
+        None if requested => Err(ParentError::NotMapped),
+        None => Err(ParentError::NotFound),
+    }
+}
+
+/// `id` and every popup below it, each child ahead of its parent: the order xdg-shell requires
+/// popups be destroyed in. Siblings are sorted by id only to keep the order deterministic.
+///
+/// `links` pairs each popup with the popup it is parented to.
+fn subtree_leaf_first(links: &[(PopupId, Option<PopupId>)], id: PopupId) -> Vec<PopupId> {
+    // Breadth-first from `id`, so the reversal puts every child ahead of its parent.
+    let mut order = vec![id];
+    let mut next = 0;
+    while let Some(&parent) = order.get(next) {
+        // `order.contains` also stops a malformed cycle.
+        let mut children: Vec<_> = links
+            .iter()
+            .filter(|(child, link)| *link == Some(parent) && !order.contains(child))
+            .map(|(child, _)| *child)
+            .collect();
+        children.sort_unstable();
+        order.extend(children);
+        next += 1;
+    }
+    order.reverse();
+    order
 }
 
 /// Manages popup surfaces and their rendering state.
@@ -124,6 +203,8 @@ where
     P::Theme: theme::Base,
 {
     entries: BTreeMap<PopupId, Popup<C>>,
+    /// Popups asked of winit and not reported back yet.
+    requested: BTreeSet<window::Id>,
     _marker: std::marker::PhantomData<P>,
 }
 
@@ -137,8 +218,19 @@ where
     pub fn new() -> Self {
         Self {
             entries: BTreeMap::new(),
+            requested: BTreeSet::new(),
             _marker: std::marker::PhantomData,
         }
+    }
+
+    /// Note that popup `iced_id` was asked of winit, until it is inserted or its creation fails.
+    pub fn request(&mut self, iced_id: window::Id) {
+        let _ = self.requested.insert(iced_id);
+    }
+
+    /// Forget a requested popup winit couldn't create.
+    pub fn creation_failed(&mut self, iced_id: window::Id) {
+        let _ = self.requested.remove(&iced_id);
     }
 
     /// Insert a new popup (before it's configured).
@@ -146,16 +238,19 @@ where
         &mut self,
         id: PopupId,
         iced_id: window::Id,
-        parent_id: window::Id,
+        parent: PopupParent,
         size: Size<u32>,
         scale_factor: f32,
     ) {
+        let _ = self.requested.remove(&iced_id);
         let _ = self.entries.insert(
             id,
             Popup {
                 id,
                 iced_id,
-                parent_id,
+                parent_id: parent.id,
+                root_window: parent.root_window,
+                parent_popup: parent.popup,
                 winit_popup_id: None,
                 size,
                 scale_factor,
@@ -163,6 +258,7 @@ where
                 surface: None,
                 renderer: None,
                 configured: false,
+                presented: false,
             },
         );
     }
@@ -224,14 +320,37 @@ where
         self.entries.remove(&id)
     }
 
-    /// Remove a popup by its iced window ID.
-    pub fn remove_by_iced_id(&mut self, iced_id: window::Id) -> Option<Popup<C>> {
-        let popup_id = self
+    /// Find a popup by its iced window ID.
+    pub fn find_by_iced_id(&self, iced_id: window::Id) -> Option<&Popup<C>> {
+        self.entries.values().find(|p| p.iced_id == iced_id)
+    }
+
+    /// The popup `iced_id` as a parent for a new popup.
+    pub fn parent_popup(&self, iced_id: window::Id) -> Result<PopupParent, ParentError> {
+        resolve_parent(
+            iced_id,
+            self.find_by_iced_id(iced_id)
+                .map(|p| (p.id, p.root_window, p.presented)),
+            self.requested.contains(&iced_id),
+        )
+    }
+
+    /// Each of `tops` with its subtree, children ahead of parents, as `(key, iced ID)`.
+    /// Unknown IDs are skipped.
+    pub fn subtrees_leaf_first(
+        &self,
+        tops: impl IntoIterator<Item = PopupId>,
+    ) -> Vec<(PopupId, window::Id)> {
+        let links: Vec<_> = self
             .entries
-            .iter()
-            .find(|(_, p)| p.iced_id == iced_id)
-            .map(|(id, _)| *id)?;
-        self.entries.remove(&popup_id)
+            .values()
+            .map(|p| (p.id, p.parent_popup))
+            .collect();
+        tops.into_iter()
+            .filter(|id| self.entries.contains_key(id))
+            .flat_map(|id| subtree_leaf_first(&links, id))
+            .filter_map(|id| self.entries.get(&id).map(|p| (id, p.iced_id)))
+            .collect()
     }
 
     /// Find a popup by its winit popup ID.
@@ -244,7 +363,7 @@ where
     /// Resize a popup by its iced window ID.
     ///
     /// Updates the popup's size, viewport, and reconfigures the compositor
-    /// surface. Returns the winit popup ID and parent ID if successful.
+    /// surface. Returns the winit popup ID and root window ID if successful.
     pub fn resize(
         &mut self,
         iced_id: window::Id,
@@ -269,7 +388,7 @@ where
         }
 
         let winit_id = popup.winit_popup_id?;
-        Some((winit_id, popup.parent_id))
+        Some((winit_id, popup.root_window))
     }
 
     /// Check if manager is empty.
@@ -303,5 +422,104 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ParentError, PopupId, PopupParent, resolve_parent, subtree_leaf_first};
+    use crate::core::window;
+
+    #[test]
+    fn unknown_parent_is_not_found() {
+        let id = window::Id::unique();
+        assert_eq!(resolve_parent(id, None, false), Err(ParentError::NotFound));
+    }
+
+    #[test]
+    fn parent_in_flight_or_undrawn_is_not_mapped() {
+        let (id, root) = (window::Id::unique(), window::Id::unique());
+        assert_eq!(resolve_parent(id, None, true), Err(ParentError::NotMapped));
+        assert_eq!(
+            resolve_parent(id, Some((PopupId(7), root, false)), false),
+            Err(ParentError::NotMapped)
+        );
+    }
+
+    #[test]
+    fn drawn_parent_nests_under_its_root() {
+        let (id, root) = (window::Id::unique(), window::Id::unique());
+        assert_eq!(
+            resolve_parent(id, Some((PopupId(7), root, true)), false),
+            Ok(PopupParent {
+                id,
+                root_window: root,
+                popup: Some(PopupId(7)),
+            })
+        );
+    }
+
+    fn ids(raw: &[u64]) -> Vec<PopupId> {
+        raw.iter().copied().map(PopupId).collect()
+    }
+
+    fn links(raw: &[(u64, Option<u64>)]) -> Vec<(PopupId, Option<PopupId>)> {
+        raw.iter()
+            .map(|&(id, parent)| (PopupId(id), parent.map(PopupId)))
+            .collect()
+    }
+
+    #[test]
+    fn toplevel_popups_are_only_themselves() {
+        let links = links(&[(1, None), (2, None), (3, None)]);
+        for id in 1..=3 {
+            assert_eq!(subtree_leaf_first(&links, PopupId(id)), ids(&[id]));
+        }
+    }
+
+    #[test]
+    fn window_parent_is_its_own_root() {
+        let id = window::Id::unique();
+        let parent = PopupParent::window(id);
+        assert_eq!(parent.root_window, id);
+        assert_eq!(parent.popup, None);
+    }
+
+    #[test]
+    fn chain_destroys_deepest_first() {
+        let links = links(&[(1, None), (2, Some(1)), (3, Some(2))]);
+        assert_eq!(subtree_leaf_first(&links, PopupId(1)), ids(&[3, 2, 1]));
+    }
+
+    #[test]
+    fn branches_put_children_before_parents() {
+        // 1 -> {2 -> 3, 4}; input order must not matter.
+        let links = links(&[(4, Some(1)), (3, Some(2)), (1, None), (2, Some(1))]);
+        assert_eq!(subtree_leaf_first(&links, PopupId(1)), ids(&[3, 4, 2, 1]));
+    }
+
+    #[test]
+    fn subtree_excludes_parent_and_siblings() {
+        let links = links(&[
+            (1, None),
+            (2, Some(1)),
+            (3, Some(2)),
+            (4, Some(1)),
+            (5, None),
+        ]);
+        assert_eq!(subtree_leaf_first(&links, PopupId(2)), ids(&[3, 2]));
+    }
+
+    #[test]
+    fn orphan_is_only_itself() {
+        // A child whose parent iced already dropped, awaiting winit's `Done`.
+        let links = links(&[(2, Some(1)), (3, None)]);
+        assert_eq!(subtree_leaf_first(&links, PopupId(2)), ids(&[2]));
+    }
+
+    #[test]
+    fn cycle_terminates() {
+        let links = links(&[(1, Some(2)), (2, Some(1))]);
+        assert_eq!(subtree_leaf_first(&links, PopupId(1)), ids(&[2, 1]));
     }
 }

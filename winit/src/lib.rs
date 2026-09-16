@@ -429,6 +429,9 @@ where
                                 kind: PopupPointerEventKind::Button { button, pressed },
                             });
                         }
+                        // Keyboard and focus events delivered to the popup surface
+                        // itself. Popups are given none, so drop them.
+                        winit::platform::wayland::PopupEvent::Window { .. } => {}
                     }
                 }
             }
@@ -610,8 +613,8 @@ where
                             ))]
                             Control::CreatePopup {
                                 id,
-                                parent_iced_id,
-                                parent_winit_id,
+                                parent,
+                                root_winit_id,
                                 size,
                                 anchor_rect,
                                 anchor,
@@ -629,11 +632,12 @@ where
                             } => {
                                 use winit::platform::wayland::ActiveEventLoopExtWayland;
                                 use winit::platform::wayland::{
-                                    PopupAnchor, PopupGravity, PopupSettings as WinitPopupSettings,
+                                    PopupAnchor, PopupGravity, PopupId as WinitPopupId,
+                                    PopupSettings as WinitPopupSettings,
                                 };
 
                                 let settings = WinitPopupSettings {
-                                    parent_id: parent_winit_id,
+                                    parent_id: root_winit_id,
                                     size,
                                     anchor_rect,
                                     anchor: PopupAnchor::from(anchor),
@@ -650,12 +654,19 @@ where
                                     tooltip_delay_ms,
                                 };
 
-                                if let Some(winit_popup_id) = event_loop.create_popup(settings) {
+                                // The popup manager's key is the winit popup id.
+                                let created = match parent.popup {
+                                    None => event_loop.create_popup(settings),
+                                    Some(parent_popup) => event_loop
+                                        .create_child_popup(WinitPopupId(parent_popup.0), settings),
+                                };
+
+                                if let Some(winit_popup_id) = created {
                                     // Send event to run_instance to track the popup
                                     let _ = self.sender.unbounded_send(Event::PopupCreated {
                                         iced_id: id,
                                         winit_popup_id: winit_popup_id.0,
-                                        parent_id: parent_iced_id,
+                                        parent,
                                         size,
                                     });
                                 } else {
@@ -663,6 +674,9 @@ where
                                         "Failed to create xdg_popup for window {:?}",
                                         id
                                     );
+                                    let _ = self
+                                        .sender
+                                        .unbounded_send(Event::PopupCreateFailed { iced_id: id });
                                 }
                             }
                             #[cfg(all(
@@ -766,8 +780,15 @@ enum Event<Message: 'static> {
     PopupCreated {
         iced_id: window::Id,
         winit_popup_id: u64,
-        parent_id: window::Id,
+        parent: popup::PopupParent,
         size: (u32, u32),
+    },
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+    ))]
+    PopupCreateFailed {
+        iced_id: window::Id,
     },
     #[cfg(all(
         unix,
@@ -818,8 +839,9 @@ enum Control {
     ))]
     CreatePopup {
         id: window::Id,
-        parent_iced_id: window::Id,
-        parent_winit_id: winit::window::WindowId,
+        parent: popup::PopupParent,
+        /// Winit keys pointer and cursor handling on the root toplevel, even for nested popups.
+        root_winit_id: winit::window::WindowId,
         size: (u32, u32),
         anchor_rect: (i32, i32, i32, i32),
         anchor: u32,
@@ -1090,12 +1112,12 @@ async fn run_instance<P>(
             Event::PopupCreated {
                 iced_id,
                 winit_popup_id,
-                parent_id,
+                parent,
                 size,
             } => {
-                // Get scale factor from parent window
+                // Get scale factor from the root window
                 let scale_factor = window_manager
-                    .get(parent_id)
+                    .get(parent.root_window)
                     .map(|w| w.state.scale_factor())
                     .unwrap_or(1.0);
 
@@ -1103,7 +1125,7 @@ async fn run_instance<P>(
                 popup_manager.insert(
                     popup::PopupId(winit_popup_id),
                     iced_id,
-                    parent_id,
+                    parent,
                     Size::new(size.0, size.1),
                     scale_factor,
                 );
@@ -1137,15 +1159,22 @@ async fn run_instance<P>(
                         comp,
                     );
 
-                    // Request a redraw on the parent window so the popup
+                    // Request a redraw on the root window so the popup
                     // gets rendered on the next frame.
                     if let Some(popup) = popup_manager.get(popup_id) {
-                        let parent_id = popup.parent_id;
-                        if let Some(parent_window) = window_manager.get_mut(parent_id) {
-                            parent_window.raw.request_redraw();
+                        let root_window = popup.root_window;
+                        if let Some(root) = window_manager.get_mut(root_window) {
+                            root.raw.request_redraw();
                         }
                     }
                 }
+            }
+            #[cfg(all(
+                unix,
+                not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+            ))]
+            Event::PopupCreateFailed { iced_id } => {
+                popup_manager.creation_failed(iced_id);
             }
             #[cfg(all(
                 unix,
@@ -1171,7 +1200,7 @@ async fn run_instance<P>(
             } => {
                 if let Some(popup) = popup_manager.find_by_winit_id(winit_popup_id) {
                     let iced_id = popup.iced_id;
-                    let parent_id = popup.parent_id;
+                    let root_window = popup.root_window;
 
                     match kind {
                         PopupPointerEventKind::Enter { x, y }
@@ -1210,9 +1239,9 @@ async fn run_instance<P>(
                         }
                     }
 
-                    // Request redraw on parent window to trigger popup rendering
+                    // Request redraw on the root window to trigger popup rendering
                     if let Some((_id, window)) =
-                        window_manager.iter_mut().find(|(id, _)| *id == parent_id)
+                        window_manager.iter_mut().find(|(id, _)| *id == root_window)
                     {
                         window.raw.request_redraw();
                     }
@@ -1621,7 +1650,7 @@ async fn run_instance<P>(
                             ))]
                             let popup_has_cursor = popup_manager
                                 .iter()
-                                .any(|(_, p)| p.parent_id == id && p.configured)
+                                .any(|(_, p)| p.root_window == id && p.configured)
                                 && popup_cursor_position.values().next().is_some();
 
                             #[cfg(not(all(
@@ -1715,8 +1744,8 @@ async fn run_instance<P>(
                                 ))]
                                 {
                                     for (_popup_id, popup) in popup_manager.iter_mut() {
-                                        // Only render popups that belong to this window
-                                        if popup.parent_id != id || !popup.configured {
+                                        // Only render popups whose tree hangs off this window
+                                        if popup.root_window != id || !popup.configured {
                                             continue;
                                         }
 
@@ -1784,13 +1813,19 @@ async fn run_instance<P>(
 
                                             // Present the popup surface with transparent background
                                             // so rounded corners and shadows render correctly
-                                            let _ = current_compositor.present(
-                                                renderer,
-                                                surface,
-                                                viewport,
-                                                crate::core::Color::TRANSPARENT,
-                                                || {},
-                                            );
+                                            if current_compositor
+                                                .present(
+                                                    renderer,
+                                                    surface,
+                                                    viewport,
+                                                    crate::core::Color::TRANSPARENT,
+                                                    || {},
+                                                )
+                                                .is_ok()
+                                            {
+                                                // Mapped now, so it can parent a popup.
+                                                popup.presented = true;
+                                            }
                                         }
                                     }
                                 }
@@ -1939,27 +1974,27 @@ async fn run_instance<P>(
                                     ..
                                 }
                             ) {
-                                let child_popups: Vec<_> = popup_manager
-                                    .iter()
-                                    .filter(|(_, p)| p.parent_id == id && p.configured)
-                                    .map(|(pid, p)| (*pid, p.iced_id))
-                                    .collect();
-                                for (popup_id, iced_id) in child_popups {
-                                    let _ = ui_caches.remove(&iced_id);
-                                    let _ = user_interfaces.remove(&iced_id);
-                                    let _ = popup_cursor_position.remove(&iced_id);
-                                    let _ = popup_manager.remove(popup_id);
-                                    events.push((
-                                        iced_id,
-                                        core::Event::Window(core::window::Event::Closed),
-                                    ));
-                                    // The key IS the winit popup id -- see the note in
-                                    // `Action::Show` on why `Popup::winit_popup_id` can't
-                                    // be used here.
-                                    let _ = control_sender.start_send(Control::DestroyPopup {
-                                        winit_popup_id: popup_id.0,
-                                    });
+                                let child_popups = popup_manager.subtrees_leaf_first(
+                                    popup_manager
+                                        .iter()
+                                        .filter(|(_, p)| {
+                                            p.parent_popup.is_none()
+                                                && p.parent_id == id
+                                                && p.configured
+                                        })
+                                        .map(|(pid, _)| *pid),
+                                );
+                                for (_, iced_id) in &child_popups {
+                                    let _ = popup_cursor_position.remove(iced_id);
                                 }
+                                destroy_popups(
+                                    child_popups,
+                                    &mut popup_manager,
+                                    &mut user_interfaces,
+                                    &mut ui_caches,
+                                    &mut events,
+                                    &mut control_sender,
+                                );
                             }
 
                             if let Some(event) = conversion::window_event(
@@ -2159,12 +2194,12 @@ async fn run_instance<P>(
                                     let cache = popup_ui.into_cache();
                                     let _ = ui_caches.insert(iced_id, cache);
 
-                                    // Request parent window redraw to trigger popup re-render
-                                    if let Some((_id, parent_window)) = window_manager
+                                    // Request root window redraw to trigger popup re-render
+                                    if let Some((_id, root)) = window_manager
                                         .iter_mut()
-                                        .find(|(wid, _)| *wid == popup.parent_id)
+                                        .find(|(wid, _)| *wid == popup.root_window)
                                     {
-                                        parent_window.raw.request_redraw();
+                                        root.raw.request_redraw();
                                     }
                                 }
                             }
@@ -2369,6 +2404,37 @@ where
     runtime.track(recipes);
 
     actions
+}
+
+/// Forgets `doomed` popups and destroys their xdg_popups in the order given, which must be
+/// leaf-first: destroying a popup under a live child is `not_the_topmost_popup`.
+///
+/// Destroys by map key, which is the winit popup id -- see the note in `Action::Show`.
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+))]
+fn destroy_popups<'a, P, C>(
+    doomed: Vec<(popup::PopupId, window::Id)>,
+    popup_manager: &mut popup::PopupManager<P, C>,
+    interfaces: &mut FxHashMap<window::Id, UserInterface<'a, P::Message, P::Theme, P::Renderer>>,
+    ui_caches: &mut FxHashMap<window::Id, user_interface::Cache>,
+    events: &mut Vec<(window::Id, core::Event)>,
+    control_sender: &mut mpsc::UnboundedSender<Control>,
+) where
+    P: Program,
+    C: Compositor<Renderer = P::Renderer>,
+    P::Theme: theme::Base,
+{
+    for (popup_id, iced_id) in doomed {
+        let _ = ui_caches.remove(&iced_id);
+        let _ = interfaces.remove(&iced_id);
+        let _ = popup_manager.remove(popup_id);
+        events.push((iced_id, core::Event::Window(core::window::Event::Closed)));
+        let _ = control_sender.start_send(Control::DestroyPopup {
+            winit_popup_id: popup_id.0,
+        });
+    }
 }
 
 fn run_action<'a, P, C>(
@@ -3204,19 +3270,57 @@ fn run_action<'a, P, C>(
                     match wayland_action {
                         WaylandAction::Popup(popup_action) => match popup_action {
                             popup::Action::Show { settings } => {
-                                // Get the parent window's winit ID from the window manager
-                                let parent_winit_id = match window_manager.get(settings.parent) {
-                                    Some(parent_window) => parent_window.raw.id(),
+                                // A window parent, else a popup to nest under; winit needs the
+                                // root toplevel's ID either way.
+                                let (parent, root_winit_id) = match window_manager
+                                    .get(settings.parent)
+                                {
+                                    Some(parent_window) => (
+                                        crate::popup::PopupParent::window(settings.parent),
+                                        parent_window.raw.id(),
+                                    ),
                                     None => {
-                                        tracing::warn!(
-                                            "Parent window {:?} not found for popup",
-                                            settings.parent
-                                        );
-                                        return;
+                                        let nested =
+                                            match popup_manager.parent_popup(settings.parent) {
+                                                Ok(parent) => window_manager
+                                                    .get(parent.root_window)
+                                                    .map(|root| (parent, root.raw.id()))
+                                                    .ok_or("its root window is gone"),
+                                                Err(crate::popup::ParentError::NotMapped) => {
+                                                    Err("it isn't drawn yet")
+                                                }
+                                                Err(crate::popup::ParentError::NotFound) => {
+                                                    tracing::warn!(
+                                                        "Parent window {:?} not found for popup",
+                                                        settings.parent
+                                                    );
+                                                    return;
+                                                }
+                                            };
+                                        match nested {
+                                            Ok(nested) => nested,
+                                            Err(reason) => {
+                                                tracing::warn!(
+                                                    "Can't nest popup {:?} under popup {:?}: {reason}",
+                                                    settings.id,
+                                                    settings.parent
+                                                );
+                                                // Never shown; tell the app so it stops counting
+                                                // it as open.
+                                                events.push((
+                                                    settings.id,
+                                                    core::Event::Window(
+                                                        core::window::Event::Closed,
+                                                    ),
+                                                ));
+                                                return;
+                                            }
+                                        }
                                     }
                                 };
 
-                                // Destroy any existing popups for this parent.
+                                // Destroy any existing popups for this parent, each subtree
+                                // leaf-first.
                                 //
                                 // Keyed off the map key, NOT `Popup::winit_popup_id`: the
                                 // entry is inserted with that field `None` and only filled
@@ -3228,23 +3332,23 @@ fn run_action<'a, P, C>(
                                 // `xdg_wm_base.not_the_topmost_popup`, which kills the
                                 // client. The key is the winit popup id (see the
                                 // `PopupCreated` insert), so it's always right.
-                                let existing: Vec<_> = popup_manager
-                                    .iter()
-                                    .filter(|(_, p)| p.parent_id == settings.parent)
-                                    .map(|(id, p)| (*id, p.iced_id))
-                                    .collect();
-                                for (popup_id, iced_id) in existing {
-                                    let _ = ui_caches.remove(&iced_id);
-                                    let _ = interfaces.remove(&iced_id);
-                                    let _ = popup_manager.remove(popup_id);
-                                    events.push((
-                                        iced_id,
-                                        core::Event::Window(core::window::Event::Closed),
-                                    ));
-                                    let _ = control_sender.start_send(Control::DestroyPopup {
-                                        winit_popup_id: popup_id.0,
-                                    });
-                                }
+                                let existing = popup_manager.subtrees_leaf_first(
+                                    popup_manager
+                                        .iter()
+                                        .filter(|(_, p)| {
+                                            p.parent_popup == parent.popup
+                                                && p.parent_id == settings.parent
+                                        })
+                                        .map(|(id, _)| *id),
+                                );
+                                destroy_popups(
+                                    existing,
+                                    popup_manager,
+                                    interfaces,
+                                    ui_caches,
+                                    events,
+                                    control_sender,
+                                );
 
                                 // Determine popup size: use explicit size or auto-measure content
                                 let anchor_rect = settings.positioner.anchor_rect;
@@ -3287,8 +3391,8 @@ fn run_action<'a, P, C>(
                                 control_sender
                                     .start_send(Control::CreatePopup {
                                         id: settings.id,
-                                        parent_iced_id: settings.parent,
-                                        parent_winit_id,
+                                        parent,
+                                        root_winit_id,
                                         size,
                                         anchor_rect: (
                                             anchor_rect.x,
@@ -3312,33 +3416,35 @@ fn run_action<'a, P, C>(
                                         tooltip_delay_ms: settings.tooltip_delay_ms,
                                     })
                                     .expect("Send control action");
+                                popup_manager.request(settings.id);
 
                                 *is_window_opening = true;
                             }
                             popup::Action::Hide { id } => {
-                                // Close the popup - remove from popup_manager and destroy winit surface
+                                // Close the popup and those nested under it - remove from
+                                // popup_manager and destroy the winit surfaces
                                 let _ = ui_caches.remove(&id);
                                 let _ = interfaces.remove(&id);
 
-                                if let Some(removed) = popup_manager.remove_by_iced_id(id) {
-                                    events.push((
-                                        id,
-                                        core::Event::Window(core::window::Event::Closed),
-                                    ));
-                                    // Actually destroy the winit popup surface. `removed.id`
-                                    // rather than `removed.winit_popup_id` -- hiding a popup
-                                    // before its first configure would otherwise leak it; see
-                                    // the note in `Action::Show`.
-                                    let _ = control_sender.start_send(Control::DestroyPopup {
-                                        winit_popup_id: removed.id.0,
-                                    });
+                                if let Some(popup_id) =
+                                    popup_manager.find_by_iced_id(id).map(|p| p.id)
+                                {
+                                    let doomed = popup_manager.subtrees_leaf_first([popup_id]);
+                                    destroy_popups(
+                                        doomed,
+                                        popup_manager,
+                                        interfaces,
+                                        ui_caches,
+                                        events,
+                                        control_sender,
+                                    );
                                 } else {
                                     tracing::warn!("Popup {:?} not found in popup_manager", id);
                                 }
                             }
                             popup::Action::Resize { id, width, height } => {
                                 if let Some(comp) = compositor.as_mut()
-                                    && let Some((winit_id, parent_id)) =
+                                    && let Some((winit_id, root_window)) =
                                         popup_manager.resize(id, width, height, comp)
                                 {
                                     let _ = control_sender.start_send(Control::ResizePopup {
@@ -3347,8 +3453,8 @@ fn run_action<'a, P, C>(
                                         height,
                                     });
 
-                                    if let Some(parent) = window_manager.get_mut(parent_id) {
-                                        parent.raw.request_redraw();
+                                    if let Some(root) = window_manager.get_mut(root_window) {
+                                        root.raw.request_redraw();
                                     }
                                 }
                             }
