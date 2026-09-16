@@ -195,8 +195,8 @@ bitflags = "2.0"
 bytemuck = { version = "1.0", features = ["derive"] }
 bytes = "1.6"
 cargo-hot = { version = "0.1", package = "cargo-hot-protocol" }
-cosmic-text = { git = "https://github.com/playtron-os/cosmic-text.git", rev = "b559a844e372dfe73786750401e619770c4c5607" }
-cryoglyph = { git = "https://github.com/playtron-os/cryoglyph.git", rev = "ec54dcc" }
+cosmic-text = { git = "https://github.com/playtron-os/cosmic-text.git", rev = "8eea8a130671cad659fbf8a8923c1a9d5a14ebc4" }
+cryoglyph = { git = "https://github.com/playtron-os/cryoglyph.git", rev = "1beae761d9e519932b0c74cdea832d42fd7b62e3" }
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 glam = "0.25"
 guillotiere = "0.6"
