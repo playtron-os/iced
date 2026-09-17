@@ -260,6 +260,9 @@ pub enum Action {
 
     /// Stop receiving the device's special key.
     UnregisterSpecialAction(Id),
+
+    /// Get whether Kora's Halo header floats over the window's top edge.
+    GetHaloHeaderOverlay(Id, oneshot::Sender<bool>),
 }
 
 /// A window managed by iced.
@@ -366,6 +369,20 @@ pub fn register_special_action<T>(id: Id, is_default_receiver: bool) -> Task<T> 
 /// - **Other platforms:** No effect.
 pub fn unregister_special_action<T>(id: Id) -> Task<T> {
     task::effect(crate::Action::Window(Action::UnregisterSpecialAction(id)))
+}
+
+/// Gets whether Kora's Halo header floats over the window's top edge, so the
+/// window must keep its own controls clear of it.
+///
+/// `true` only for a window opened with `PlatformSpecific::halo_header_overlay`
+/// on a compositor that offers `kora_halo_header_manager_v1`; otherwise the
+/// compositor reserves room above the window. Fixed once the window is open.
+///
+/// ## Platform-specific
+/// - **Kora/Wayland:** Uses the `kora_halo_header_manager_v1` protocol.
+/// - **Other platforms:** Always `false`.
+pub fn is_halo_header_overlay(id: Id) -> Task<bool> {
+    task::oneshot(move |channel| crate::Action::Window(Action::GetHaloHeaderOverlay(id, channel)))
 }
 
 /// Opens a new window with the given [`Settings`]; producing the [`Id`]

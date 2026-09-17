@@ -233,6 +233,9 @@ impl<P: Program + 'static> Emulator<P> {
                         window::Action::GetMode(id, sender) if id == self.window => {
                             let _ = sender.send(core::window::Mode::Windowed);
                         }
+                        window::Action::GetHaloHeaderOverlay(id, sender) if id == self.window => {
+                            let _ = sender.send(false);
+                        }
                         _ => {
                             // Ignored
                         }

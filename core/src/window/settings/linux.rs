@@ -33,6 +33,7 @@ pub struct PlatformSpecific {
     /// For a window laid out chromeless — full-bleed content whose first row
     /// already sits clear of the Halo's hot zone. The mode is sent before the
     /// window's initial commit, the only time the protocol takes it. Ignored
-    /// on X11 and on compositors without the global.
+    /// on X11 and on compositors without the global; ask
+    /// `window::is_halo_header_overlay` which one the window got.
     pub halo_header_overlay: bool,
 }
