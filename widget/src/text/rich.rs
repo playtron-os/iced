@@ -3,7 +3,7 @@ use crate::core::keyboard;
 use crate::core::layout;
 use crate::core::mouse::{self, click};
 use crate::core::renderer;
-use crate::core::text::{Hit, Paragraph, Span};
+use crate::core::text::{ADVANCED_AUTO_SHAPING, Hit, Paragraph, Span};
 use crate::core::widget::text::{
     self, Alignment, Catalog, Ellipsis, LineHeight, Shaping, Style, StyleFn, Wrapping,
 };
@@ -901,8 +901,9 @@ where
         let size = size.unwrap_or_else(|| renderer.default_size());
         let font = font.unwrap_or_else(|| renderer.default_font());
 
-        // Use Basic shaping for pure ASCII content, Advanced for complex text
-        let shaping = if spans.iter().all(|span| span.text.is_ascii()) {
+        // Use Basic shaping for pure ASCII content, unless `advanced-auto-shaping` asks for
+        // kerning, and Advanced for complex text
+        let shaping = if !ADVANCED_AUTO_SHAPING && spans.iter().all(|span| span.text.is_ascii()) {
             Shaping::Basic
         } else {
             Shaping::Advanced

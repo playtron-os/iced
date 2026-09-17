@@ -156,7 +156,9 @@ pub enum Shaping {
     ///
     /// This strategy will use [`Basic`](Self::Basic) shaping if the
     /// text consists of only ASCII characters; otherwise, it will
-    /// use [`Advanced`](Self::Advanced) shaping.
+    /// use [`Advanced`](Self::Advanced) shaping. With the
+    /// `advanced-auto-shaping` feature, ASCII text gets
+    /// [`Advanced`](Self::Advanced) shaping too (see [`ADVANCED_AUTO_SHAPING`]).
     ///
     /// This is the default, if neither the `basic-shaping` nor `advanced-shaping`
     /// features are enabled.
@@ -195,6 +197,10 @@ impl Default for Shaping {
         }
     }
 }
+
+/// Whether [`Shaping::Auto`] shapes ASCII text with [`Shaping::Advanced`] too, as the
+/// `advanced-auto-shaping` feature asks: [`Shaping::Basic`] doesn't kern.
+pub const ADVANCED_AUTO_SHAPING: bool = cfg!(feature = "advanced-auto-shaping");
 
 /// The wrapping strategy of some text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
