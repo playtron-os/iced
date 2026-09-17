@@ -458,6 +458,24 @@ where
             &list_layout.bounds(),
         );
 
+        // The border again, over the rows. A menu may be asked for no
+        // container padding at all — the rows are then flush with the panel's
+        // edge — and the first row's own background painted over the top of
+        // the line that closes the panel, and the last row's over the bottom.
+        // Drawing it twice is what keeps the panel's edge unbroken without
+        // taking the padding decision away from the theme. No shadow on this
+        // pass: the one under the panel is already cast.
+        if style.border.width > 0.0 {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds,
+                    border: style.border,
+                    ..renderer::Quad::default()
+                },
+                Background::Color(Color::TRANSPARENT),
+            );
+        }
+
         if frosted {
             renderer.end_post_blur_layer();
         }
