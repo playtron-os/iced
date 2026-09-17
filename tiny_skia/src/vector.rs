@@ -9,7 +9,6 @@ use std::cell::RefCell;
 use std::collections::hash_map;
 use std::fs;
 use std::panic;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Pipeline {
@@ -84,7 +83,6 @@ struct Cache {
     tree_hits: FxHashSet<u64>,
     rasters: FxHashMap<RasterKey, tiny_skia::Pixmap>,
     raster_hits: FxHashSet<RasterKey>,
-    fontdb: Option<Arc<usvg::fontdb::Database>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -98,20 +96,18 @@ impl Cache {
     fn load(&mut self, handle: &Handle) -> Option<&usvg::Tree> {
         let id = handle.id();
 
-        // TODO: Reuse `cosmic-text` font database
-        if self.fontdb.is_none() {
-            let mut fontdb = usvg::fontdb::Database::new();
-            fontdb.load_system_fonts();
-
-            self.fontdb = Some(Arc::new(fontdb));
-        }
+        // The text system's own database: the fonts the program bundled,
+        // the ones it loaded and the system's, so `<text>` in a picture is
+        // set in the same faces as the text beside it. A database of its
+        // own held neither, and a generic family that named a font this
+        // machine has not got left every `<text>` undrawn.
+        let fontdb = crate::graphics::text::font_database();
 
         let options = usvg::Options {
-            fontdb: self
-                .fontdb
-                .as_ref()
-                .expect("fontdb must be initialized")
-                .clone(),
+            font_family: fontdb
+                .family_name(&usvg::fontdb::Family::SansSerif)
+                .to_owned(),
+            fontdb,
             ..usvg::Options::default()
         };
 

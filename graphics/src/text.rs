@@ -16,7 +16,7 @@ use crate::core::{Color, Pixels, Point, Rectangle, Size, Transformation};
 
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::sync::{Arc, OnceLock, RwLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 
 /// A text primitive.
 #[derive(Debug, Clone, PartialEq)]
@@ -136,6 +136,35 @@ pub fn font_system() -> &'static RwLock<FontSystem> {
             version: Version::default(),
         })
     })
+}
+
+/// The font database the text system holds, shared rather than built again:
+/// the fonts bundled with the program, the ones it has loaded, and the
+/// system's. The SVG rasteriser needs one, and a second database of its own
+/// would neither hold an application's own fonts nor agree with the text
+/// beside the picture about what "sans-serif" is.
+///
+/// Cheap: a `Database` holds paths and `Arc`s, and the clone is made again
+/// only when a font has been loaded since.
+pub fn font_database() -> Arc<cosmic_text::fontdb::Database> {
+    static DATABASE: Mutex<Option<(Version, Arc<cosmic_text::fontdb::Database>)>> =
+        Mutex::new(None);
+
+    let mut font_system = font_system().write().expect("Write font system");
+    let version = font_system.version();
+
+    let mut cached = DATABASE.lock().expect("Lock font database");
+
+    if let Some((at, database)) = cached.as_ref() {
+        if *at == version {
+            return Arc::clone(database);
+        }
+    }
+
+    let database = Arc::new(font_system.raw().db().clone());
+    *cached = Some((version, Arc::clone(&database)));
+
+    database
 }
 
 /// A set of system fonts.

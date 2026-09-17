@@ -8,7 +8,6 @@ use resvg::usvg;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
 use std::panic;
-use std::sync::Arc;
 
 /// Entry in cache corresponding to an svg handle
 pub enum Svg {
@@ -42,7 +41,6 @@ pub struct Cache {
     svg_idle: Idle<u64>,
     rasterized_idle: Idle<RasterKey>,
     should_trim: bool,
-    fontdb: Option<Arc<usvg::fontdb::Database>>,
 }
 
 type ColorFilter = Option<[u8; 4]>;
@@ -61,20 +59,18 @@ impl Cache {
             return self.svgs.get(&handle.id()).unwrap();
         }
 
-        // TODO: Reuse `cosmic-text` font database
-        if self.fontdb.is_none() {
-            let mut fontdb = usvg::fontdb::Database::new();
-            fontdb.load_system_fonts();
-
-            self.fontdb = Some(Arc::new(fontdb));
-        }
+        // The text system's own database: the fonts the program bundled,
+        // the ones it loaded and the system's, so `<text>` in a picture is
+        // set in the same faces as the text beside it. A database of its
+        // own held neither, and a generic family that named a font this
+        // machine has not got left every `<text>` undrawn.
+        let fontdb = crate::graphics::text::font_database();
 
         let options = usvg::Options {
-            fontdb: self
-                .fontdb
-                .as_ref()
-                .expect("fontdb must be initialized")
-                .clone(),
+            font_family: fontdb
+                .family_name(&usvg::fontdb::Family::SansSerif)
+                .to_owned(),
+            fontdb,
             ..usvg::Options::default()
         };
 
