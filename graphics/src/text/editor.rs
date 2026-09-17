@@ -21,6 +21,11 @@ struct Internal {
     editor: cosmic_text::Editor<'static>,
     selection: RwLock<Option<Selection>>,
     font: Font,
+    /// Letter spacing as the widget set it, in pixels, and as the buffer
+    /// carries it, in EM — the text size between them is only known when
+    /// the editor is updated.
+    letter_spacing_px: Option<f32>,
+    letter_spacing: Option<f32>,
     bounds: Size,
     topmost_line_changed: Option<usize>,
     hint: bool,
@@ -551,6 +556,12 @@ impl editor::Editor for Editor {
         internal.hint.then_some(internal.hint_factor)
     }
 
+    fn set_letter_spacing(&mut self, new_letter_spacing: Option<Pixels>) {
+        self.with_internal_mut(|internal| {
+            internal.letter_spacing_px = new_letter_spacing.map(|spacing| spacing.0);
+        });
+    }
+
     fn update(
         &mut self,
         new_bounds: Size,
@@ -577,16 +588,24 @@ impl editor::Editor for Editor {
                 internal.topmost_line_changed = Some(0);
             }
 
-            if new_font != internal.font {
+            // Letter spacing is held in EM, which is what cosmic-text takes
+            // and what stays true when hinting scales the size.
+            let new_letter_spacing = internal
+                .letter_spacing_px
+                .filter(|_| new_size.0 > 0.0)
+                .map(|spacing| spacing / new_size.0);
+
+            if new_font != internal.font || new_letter_spacing != internal.letter_spacing {
                 log::trace!("Updating font of `Editor`...");
 
+                let attributes = to_attributes(new_font, new_letter_spacing);
+
                 for line in buffer.lines.iter_mut() {
-                    let _ = line.set_attrs_list(cosmic_text::AttrsList::new(&text::to_attributes(
-                        new_font,
-                    )));
+                    let _ = line.set_attrs_list(cosmic_text::AttrsList::new(&attributes));
                 }
 
                 internal.font = new_font;
+                internal.letter_spacing = new_letter_spacing;
                 internal.topmost_line_changed = Some(0);
             }
 
@@ -730,7 +749,8 @@ impl editor::Editor for Editor {
 
         let mut font_system = text::font_system().write().expect("Write font system");
 
-        let attributes = text::to_attributes(font);
+        let letter_spacing = internal.letter_spacing;
+        let attributes = to_attributes(font, letter_spacing);
 
         for line in &mut buffer_mut_from_editor(&mut internal.editor).lines
             [current_line..=last_visible_line]
@@ -747,7 +767,7 @@ impl editor::Editor for Editor {
                     || format.background.is_some()
                 {
                     let mut attrs = if let Some(font) = format.font {
-                        text::to_attributes(font)
+                        to_attributes(font, letter_spacing)
                     } else {
                         attributes.clone()
                     };
@@ -769,6 +789,16 @@ impl editor::Editor for Editor {
         internal.editor.shape_as_needed(font_system.raw(), false);
 
         self.0 = Some(Arc::new(internal));
+    }
+}
+
+/// The attributes of a font with letter spacing in EM, which is how the
+/// editor holds it — `text::to_attributes_with_spacing` takes pixels.
+fn to_attributes(font: Font, letter_spacing: Option<f32>) -> cosmic_text::Attrs<'static> {
+    let attributes = text::to_attributes(font);
+    match letter_spacing {
+        Some(em) => attributes.letter_spacing(em),
+        None => attributes,
     }
 }
 
@@ -798,6 +828,8 @@ impl Default for Internal {
             )),
             selection: RwLock::new(None),
             font: Font::default(),
+            letter_spacing_px: None,
+            letter_spacing: None,
             bounds: Size::ZERO,
             topmost_line_changed: None,
             hint: false,

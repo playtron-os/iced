@@ -644,6 +644,7 @@ where
             .min_height(self.min_height)
             .max_height(self.max_height);
 
+        internal.editor.set_letter_spacing(self.letter_spacing);
         internal.editor.update(
             limits.shrink(self.padding).max(),
             self.font.unwrap_or_else(|| renderer.default_font()),

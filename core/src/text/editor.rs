@@ -48,6 +48,13 @@ pub trait Editor: Sized + Default {
     /// Returns the hint factor of the [`Editor`].
     fn hint_factor(&self) -> Option<f32>;
 
+    /// Sets the letter spacing of the [`Editor`], in pixels.
+    ///
+    /// It takes effect on the next [`Editor::update`], which is where the
+    /// text size it is relative to is known. An [`Editor`] that does not
+    /// space its letters may ignore this.
+    fn set_letter_spacing(&mut self, _letter_spacing: Option<Pixels>) {}
+
     /// Updates the [`Editor`] with some new attributes.
     fn update(
         &mut self,
