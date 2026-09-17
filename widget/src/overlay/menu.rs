@@ -16,6 +16,8 @@ use crate::core::{
 use crate::core::{Element, Shell, Widget};
 use crate::scrollable::{self, Scrollable};
 
+use std::cell::Cell;
+
 /// A list of selectable options.
 pub struct Menu<'a, 'b, T, Message, Theme = crate::Theme, Renderer = crate::Renderer>
 where
@@ -177,6 +179,7 @@ where
 #[derive(Debug)]
 pub struct State {
     tree: Tree,
+    placement: Cell<Option<bool>>,
 }
 
 impl State {
@@ -184,7 +187,27 @@ impl State {
     pub fn new() -> Self {
         Self {
             tree: Tree::empty(),
+            placement: Cell::new(None),
         }
+    }
+
+    /// Whether the menu went ABOVE its target the last time it was laid out,
+    /// or `None` if it has not been laid out yet.
+    ///
+    /// The widget that owns the menu styles the edge they share from this,
+    /// rather than working the direction out a second time: its own bounds
+    /// are where it was LAID OUT, and a surface that is laid out in one place
+    /// and drawn in another — a modal that centres its dialog — moves the
+    /// menu and not the widget, so the two answers differ and the two halves
+    /// of one shape square opposite edges.
+    pub fn opens_upward(&self) -> Option<bool> {
+        self.placement.get()
+    }
+
+    /// Forget where the menu last went — it is closed, and the next opening
+    /// is laid out again.
+    pub fn forget_placement(&self) {
+        self.placement.set(None);
     }
 }
 
@@ -202,6 +225,8 @@ where
     position: Point,
     viewport: Rectangle,
     tree: &'a mut Tree,
+    /// Written by `layout`, read by the widget this menu belongs to.
+    placement: &'a Cell<Option<bool>>,
     list: Scrollable<'a, Message, Theme, Renderer>,
     width: f32,
     container_padding: Padding,
@@ -266,12 +291,14 @@ where
         })
         .height(menu_height);
 
-        state.tree.diff(&list as &dyn Widget<_, _, _>);
+        let State { tree, placement } = state;
+        tree.diff(&list as &dyn Widget<_, _, _>);
 
         Self {
             position,
             viewport,
-            tree: &mut state.tree,
+            tree,
+            placement,
             list,
             width,
             container_padding,
@@ -318,7 +345,13 @@ where
             vec![list_node.move_to(Point::new(pad.left, pad.top))],
         );
 
-        node.move_to(if space_below > space_above {
+        // The one decision about which way this menu goes. The widget it
+        // belongs to reads it back rather than deciding again (see
+        // `State::opens_upward`).
+        let downward = space_below > space_above;
+        self.placement.set(Some(!downward));
+
+        node.move_to(if downward {
             self.position + Vector::new(0.0, self.target_height)
         } else {
             self.position - Vector::new(0.0, size.height)

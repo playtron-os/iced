@@ -656,13 +656,29 @@ where
         let status = {
             let is_hovered = cursor.is_over(layout.bounds());
 
+            if !state.is_open {
+                // A closed menu has no placement; the next opening is laid
+                // out where it is opened.
+                state.menu.forget_placement();
+            }
+
             if self.on_select.is_none() {
                 Status::Disabled
             } else if state.is_open {
-                let bounds = layout.bounds();
-                let space_below = (viewport.y + viewport.height) - (bounds.y + bounds.height);
-                let space_above = bounds.y - viewport.y;
-                let opens_upward = space_above > space_below;
+                // Where the menu ACTUALLY went, from the overlay that placed
+                // it. The guess below is only the bootstrap for the frame
+                // before it is first laid out: these bounds are where this
+                // widget was laid OUT, and inside a surface that is laid out
+                // in one place and drawn in another — a modal centring its
+                // dialog — the menu moves and the widget does not, so the two
+                // halves of one shape squared opposite edges.
+                let opens_upward = state.menu.opens_upward().unwrap_or_else(|| {
+                    let bounds = layout.bounds();
+                    let space_below = (viewport.y + viewport.height) - (bounds.y + bounds.height);
+                    let space_above = bounds.y - viewport.y;
+
+                    space_above > space_below
+                });
 
                 Status::Opened {
                     is_hovered,
