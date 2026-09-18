@@ -462,6 +462,23 @@ where
         self.0.borrow().editor.copy()
     }
 
+    /// Returns the box the selection occupies, in the TEXT's own coordinates
+    /// — the widget's bounds shrunk by its padding — or `None` when nothing
+    /// is selected.
+    ///
+    /// The editor is the only thing that knows where a selection landed: it
+    /// wraps, it scrolls, and a caller counting characters cannot see either.
+    /// A surface anchored to the selection — a comment bubble hanging under
+    /// the words it is about — needs this and has no other way to it.
+    pub fn selection_bounds(&self) -> Option<Rectangle> {
+        match self.0.borrow().editor.selection() {
+            Selection::Caret(_) => None,
+            Selection::Range(regions) => regions
+                .into_iter()
+                .reduce(|whole, region| whole.union(&region)),
+        }
+    }
+
     /// Returns the kind of [`LineEnding`] used for separating lines in the [`Content`].
     pub fn line_ending(&self) -> Option<LineEnding> {
         Some(self.line(0)?.ending)
