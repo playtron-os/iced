@@ -49,7 +49,7 @@ pub use proxy::Proxy;
 use crate::core::mouse;
 use crate::core::renderer;
 use crate::core::theme;
-use crate::core::time::Instant;
+use crate::core::time::{Duration, Instant};
 use crate::core::widget::operation;
 use crate::core::widget::operation::focusable::take_focus_dirty;
 use crate::core::{Point, Size};
@@ -1929,55 +1929,66 @@ async fn run_instance<P>(
                                     // This is an unrecoverable error.
                                     panic!("{error:?}");
                                 }
-                                compositor::SurfaceError::Outdated
-                                | compositor::SurfaceError::Lost => {
+                                compositor::SurfaceError::Timeout => {
                                     present_span.finish();
-
-                                    // Reconfigure surface and try redrawing.
-                                    // Use catch_unwind to handle Wayland broken pipe errors
-                                    // that can occur during rapid maximize/unmaximize.
-                                    let physical_size = window.state.physical_size();
-
-                                    let recovered = std::panic::catch_unwind(
-                                        std::panic::AssertUnwindSafe(|| {
-                                            if error == compositor::SurfaceError::Lost {
-                                                window.surface = current_compositor.create_surface(
-                                                    window.raw.clone(),
-                                                    physical_size.width,
-                                                    physical_size.height,
-                                                );
-                                            } else {
-                                                current_compositor.configure_surface(
-                                                    &mut window.surface,
-                                                    physical_size.width,
-                                                    physical_size.height,
-                                                );
-                                            }
-                                        }),
-                                    );
-
-                                    if let Err(e) = recovered {
-                                        let msg = if let Some(s) = e.downcast_ref::<String>() {
-                                            s.as_str()
-                                        } else if let Some(s) = e.downcast_ref::<&str>() {
-                                            s
-                                        } else {
-                                            "unknown panic"
-                                        };
-                                        log::error!(
-                                            "Surface recovery failed after {error:?}: {msg}. Will retry next frame."
-                                        );
-                                    }
 
                                     window.request_frame();
                                 }
-                                _ => {
+                                compositor::SurfaceError::Lost
+                                | compositor::SurfaceError::Outdated
+                                | compositor::SurfaceError::Other => {
                                     present_span.finish();
 
-                                    log::error!("Error {error:?} when presenting surface.");
+                                    // Reconfigure or recreate at most once a second,
+                                    // and do not request a redraw in between, so a
+                                    // surface that keeps failing cannot spin the loop.
+                                    let due = window
+                                        .surface_error_at
+                                        .is_none_or(|at| at.elapsed() > Duration::from_secs(1));
 
-                                    // Try rendering all windows again next frame.
-                                    for (_id, window) in window_manager.iter_mut() {
+                                    if due {
+                                        window.surface_error_at = Some(Instant::now());
+
+                                        log::warn!(
+                                            "Error {error:?} when presenting surface. Recovering it."
+                                        );
+
+                                        let physical_size = window.state.physical_size();
+
+                                        // Use catch_unwind to handle Wayland broken pipe errors
+                                        // that can occur during rapid maximize/unmaximize.
+                                        let recovered = std::panic::catch_unwind(
+                                            std::panic::AssertUnwindSafe(|| {
+                                                if error == compositor::SurfaceError::Outdated {
+                                                    current_compositor.configure_surface(
+                                                        &mut window.surface,
+                                                        physical_size.width,
+                                                        physical_size.height,
+                                                    );
+                                                } else {
+                                                    window.surface = current_compositor
+                                                        .create_surface(
+                                                            window.raw.clone(),
+                                                            physical_size.width,
+                                                            physical_size.height,
+                                                        );
+                                                }
+                                            }),
+                                        );
+
+                                        if let Err(e) = recovered {
+                                            let msg = if let Some(s) = e.downcast_ref::<String>() {
+                                                s.as_str()
+                                            } else if let Some(s) = e.downcast_ref::<&str>() {
+                                                s
+                                            } else {
+                                                "unknown panic"
+                                            };
+                                            log::error!(
+                                                "Surface recovery failed after {error:?}: {msg}."
+                                            );
+                                        }
+
                                         window.request_frame();
                                     }
                                 }
