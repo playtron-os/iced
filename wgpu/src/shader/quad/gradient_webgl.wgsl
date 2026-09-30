@@ -135,7 +135,7 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.border_color_packed = pack_color_to_u32(premultiply(input.border_color));
     out.border_radius = border_radius * globals.scale;
     // WebGL2: pass max border width as uniform (per-side not supported due to varying limit)
-    let border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w)) * globals.scale;
+    let border_width = snap_border_widths(vec4(max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w)) * globals.scale)).x;
     out.shadow_color_packed = pack_color_to_u32(premultiply(input.shadow_color));
     out.shadow_offset = input.shadow_offset * globals.scale;
     // Halves keep the varying count at 31: pixel sizes need no more precision.
