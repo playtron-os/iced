@@ -137,11 +137,6 @@ mod tests {
             );
 
             for (index, case) in CASES.iter().enumerate() {
-                // Per-side borders off 1x are `per_side_border`'s to check.
-                if scale != 1.0 && case.sides.iter().any(|side| *side != case.sides[0]) {
-                    continue;
-                }
-
                 let (largest, mean) = compare(&render.rgba, &chrome, case, scale);
 
                 // A line at half strength, or a pixel too wide, is off by
