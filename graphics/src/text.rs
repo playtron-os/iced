@@ -309,9 +309,33 @@ pub fn to_attributes_with_spacing(
 ) -> cosmic_text::Attrs<'static> {
     let attrs = to_attributes(font);
     match letter_spacing_px {
-        Some(px) if font_size > 0.0 => attrs.letter_spacing(px / font_size),
+        Some(px) if font_size > 0.0 => with_letter_spacing(attrs, px / font_size),
         _ => attrs,
     }
+}
+
+/// Returns `attributes` spaced by `letter_spacing` EM.
+///
+/// Spaced text also drops the ligatures and contextual alternates CSS drops
+/// from it (`liga`, `clig` and `calt`, as Chromium does): a ligature draws two
+/// letters as one glyph, so the space between them would be lost.
+pub fn with_letter_spacing(
+    attributes: cosmic_text::Attrs<'static>,
+    letter_spacing: f32,
+) -> cosmic_text::Attrs<'static> {
+    let attributes = attributes.letter_spacing(letter_spacing);
+
+    if letter_spacing == 0.0 {
+        return attributes;
+    }
+
+    let mut features = cosmic_text::FontFeatures::new();
+    let _ = features
+        .disable(cosmic_text::FeatureTag::STANDARD_LIGATURES)
+        .disable(cosmic_text::FeatureTag::CONTEXTUAL_LIGATURES)
+        .disable(cosmic_text::FeatureTag::CONTEXTUAL_ALTERNATES);
+
+    attributes.font_features(features)
 }
 
 fn to_family(family: font::Family) -> cosmic_text::Family<'static> {

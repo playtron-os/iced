@@ -166,7 +166,8 @@ where
 
     /// Sets the letter spacing of the [`Text`] in pixels.
     ///
-    /// Extra horizontal space added between each character glyph.
+    /// Extra horizontal space added between each character glyph. As in CSS,
+    /// spaced text is shaped without ligatures.
     pub fn letter_spacing(mut self, letter_spacing: f32) -> Self {
         self.format.letter_spacing = Some(letter_spacing);
         self
