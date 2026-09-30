@@ -92,7 +92,7 @@ impl App {
             text("Fade Height:").size(14),
             slider(20.0..=150.0, self.fade_height, Message::SetFadeHeight)
                 .width(200.0)
-                .step(5.0),
+                .step(5.0_f32),
             text(format!("{:.0}px", self.fade_height)).size(14),
         ]
         .spacing(10)
@@ -108,13 +108,13 @@ impl App {
                 text("Start:").size(12),
                 slider(0.0..=1.0, self.custom_start, Message::SetCustomStart)
                     .width(100.0)
-                    .step(0.05),
+                    .step(0.05_f32),
                 text(format!("{:.0}%", self.custom_start * 100.0)).size(12),
                 Space::new().width(20.0),
                 text("End:").size(12),
                 slider(0.0..=1.0, self.custom_end, Message::SetCustomEnd)
                     .width(100.0)
-                    .step(0.05),
+                    .step(0.05_f32),
                 text(format!("{:.0}%", self.custom_end * 100.0)).size(12),
             ]
             .spacing(8)

@@ -308,7 +308,7 @@ fn labeled_slider<'a>(
     row![
         text(label).width(80).color(Color::from_rgb(0.8, 0.8, 0.8)),
         slider(range, value, on_change)
-            .step(0.01)
+            .step(0.01_f32)
             .width(Length::Fixed(160.0)),
         text(format!("{:.2}", value))
             .width(50)

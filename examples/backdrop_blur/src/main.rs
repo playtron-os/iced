@@ -125,7 +125,7 @@ impl App {
                 text("Blur Radius:").size(14).color(Color::WHITE),
                 slider(0.0..=50.0, self.blur_radius, Message::BlurRadiusChanged)
                     .width(200.0)
-                    .step(1.0),
+                    .step(1.0_f32),
                 text(format!("{:.0}px", self.blur_radius))
                     .size(14)
                     .color(Color::WHITE),

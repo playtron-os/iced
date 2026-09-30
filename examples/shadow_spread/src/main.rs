@@ -89,15 +89,15 @@ impl Example {
 
         let controls = column![
             text!("Blur: {:.1}", self.blur),
-            slider(0.0..=100.0, self.blur, Message::BlurChanged).step(0.5),
+            slider(0.0..=100.0, self.blur, Message::BlurChanged).step(0.5_f32),
             text!("Spread: {:.1}", self.spread),
-            slider(-50.0..=100.0, self.spread, Message::SpreadChanged).step(0.5),
+            slider(-50.0..=100.0, self.spread, Message::SpreadChanged).step(0.5_f32),
             text!("Offset X: {:.1}", self.offset_x),
-            slider(-100.0..=100.0, self.offset_x, Message::OffsetXChanged).step(0.5),
+            slider(-100.0..=100.0, self.offset_x, Message::OffsetXChanged).step(0.5_f32),
             text!("Offset Y: {:.1}", self.offset_y),
-            slider(-100.0..=100.0, self.offset_y, Message::OffsetYChanged).step(0.5),
+            slider(-100.0..=100.0, self.offset_y, Message::OffsetYChanged).step(0.5_f32),
             text!("Border radius: {:.1}", self.radius),
-            slider(0.0..=100.0, self.radius, Message::RadiusChanged).step(0.5),
+            slider(0.0..=100.0, self.radius, Message::RadiusChanged).step(0.5_f32),
             toggler(self.inset)
                 .label("Inset shadow")
                 .on_toggle(Message::InsetToggled),

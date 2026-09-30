@@ -50,7 +50,7 @@ impl VectorialText {
         let slider_with_label = |label, range, value, message: fn(f32) -> _| {
             column![
                 row![text(label), space::horizontal(), text!("{:.2}", value)],
-                slider(range, value, message).step(0.01)
+                slider(range, value, message).step(0.01_f32)
             ]
             .spacing(2)
         };

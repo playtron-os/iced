@@ -48,21 +48,21 @@ impl Controls {
                     ..background_color
                 })
             })
-            .step(0.01),
+            .step(0.01_f32),
             slider(0.0..=1.0, background_color.g, move |g| {
                 Message::BackgroundColorChanged(Color {
                     g,
                     ..background_color
                 })
             })
-            .step(0.01),
+            .step(0.01_f32),
             slider(0.0..=1.0, background_color.b, move |b| {
                 Message::BackgroundColorChanged(Color {
                     b,
                     ..background_color
                 })
             })
-            .step(0.01),
+            .step(0.01_f32),
         ]
         .width(500)
         .spacing(20);

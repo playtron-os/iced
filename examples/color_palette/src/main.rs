@@ -186,7 +186,7 @@ impl Theme {
 
                 frame.with_save(|frame| {
                     frame.translate(Vector::new(triangle_x, 0.0));
-                    frame.scale(10.0);
+                    frame.scale(10.0_f32);
                     frame.rotate(std::f32::consts::PI);
 
                     frame.fill(&triangle, Color::WHITE);
@@ -194,7 +194,7 @@ impl Theme {
 
                 frame.with_save(|frame| {
                     frame.translate(Vector::new(triangle_x, box_size.height));
-                    frame.scale(10.0);
+                    frame.scale(10.0_f32);
 
                     frame.fill(&triangle, Color::WHITE);
                 });
