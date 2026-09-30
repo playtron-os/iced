@@ -373,28 +373,14 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
                 border_fraction(dist, dist + input.border_widths.x) * dash
             );
         } else {
-            // Per-side border using inner rounded rect SDF.
-            // The border region is between the outer and inner rounded rects,
-            // so borders naturally curve with the corner radii.
-            let bw = input.border_widths; // [top, right, bottom, left]
-
-            // Inner rect is inset by per-side widths.
-            let inner_scale = scale - vec2(bw.w + bw.y, bw.x + bw.z);
-            let inner_pos = pos + vec2(bw.w, bw.x);
-
-            // Inner corner radii shrink by the max of the two adjacent border widths.
-            let inner_radii = max(vec4(0.0), input.border_radius - vec4(
-                max(bw.x, bw.w), // top-left
-                max(bw.x, bw.y), // top-right
-                max(bw.z, bw.y), // bottom-right
-                max(bw.z, bw.w)  // bottom-left
-            ));
-
-            let inner_dist = rounded_box_sdf(
-                -(input.position.xy - inner_pos - inner_scale * 0.5) * 2.0,
-                inner_scale,
-                inner_radii * 2.0
-            ) / 2.0;
+            // The border region is between the outline and the padding edge.
+            let inner_dist = padding_edge_distance(
+                input.position.xy,
+                pos,
+                scale,
+                input.border_radius,
+                input.border_widths
+            );
 
             // Border coverage = fraction of visible pixel in border region.
             // Where inner and outer edges coincide (0-width sides), both coverages

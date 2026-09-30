@@ -37,6 +37,39 @@ fn snap_border_widths(widths: vec4<f32>) -> vec4<f32> {
     return select(floor(widths + vec4(1.0e-5)), vec4(1.0), hairline);
 }
 
+// Signed distance from `frag_pos` to the padding edge of the box at `pos` with
+// `size`: inset by `widths` [top, right, bottom, left], each corner shrunk on
+// each axis by the width of the side it meets, as CSS does, so a corner between
+// sides of different widths is a quarter ellipse. Exact along the sides; at a
+// corner, a first-order estimate that is exact on the curve itself.
+fn padding_edge_distance(frag_pos: vec2<f32>, pos: vec2<f32>, size: vec2<f32>, radius: vec4<f32>, widths: vec4<f32>) -> f32 {
+    let half = max(size - vec2(widths.w + widths.y, widths.x + widths.z), vec2(0.0)) * 0.5;
+    let p = frag_pos - pos - vec2(widths.w, widths.x) - half;
+
+    // The nearest corner's radius and the widths of the sides it joins.
+    var corner: f32;
+    var sides: vec2<f32>;
+    if p.x < 0.0 {
+        corner = select(radius.x, radius.w, p.y > 0.0);
+        sides = vec2(widths.w, select(widths.x, widths.z, p.y > 0.0));
+    } else {
+        corner = select(radius.y, radius.z, p.y > 0.0);
+        sides = vec2(widths.y, select(widths.x, widths.z, p.y > 0.0));
+    }
+
+    let r = max(vec2(corner) - sides, vec2(0.0));
+    let q = abs(p) - half + r;
+
+    if r.x > 0.0 && r.y > 0.0 && q.x > 0.0 && q.y > 0.0 {
+        let k0 = length(q / r);
+        let k1 = length(q / (r * r));
+        return k0 * (k0 - 1.0) / k1;
+    }
+
+    let d = abs(p) - half;
+    return min(max(d.x, d.y), 0.0) + length(max(d, vec2(0.0)));
+}
+
 fn border_fraction(outer_distance: f32, inner_distance: f32) -> f32 {
     return stroke_coverage(outer_distance, inner_distance) / max(edge_coverage(outer_distance), 0.001);
 }
