@@ -6,6 +6,7 @@ mod engine;
 mod layer;
 mod primitive;
 mod settings;
+mod shadow;
 mod text;
 
 #[cfg(feature = "image")]

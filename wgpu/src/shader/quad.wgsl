@@ -66,31 +66,147 @@ fn border_fraction(outer_distance: f32, inner_distance: f32) -> f32 {
     return stroke_coverage(outer_distance, inner_distance) / max(edge_coverage(outer_distance), 0.001);
 }
 
-// Both materials are premultiplied, but not yet masked by the quad's edge.
-// An inset shadow/highlight goes OVER the fill; interpolating towards its RGBA
-// instead would replace opaque artwork with a translucent band. Apply the
-// shared shape mask once, so an opaque tile retains its antialiased silhouette.
-fn inset_shadow_over(fill: vec4<f32>, shadow: vec4<f32>, outer_distance: f32, hole_distance: f32, blur: f32) -> vec4<f32> {
-    let outer = edge_coverage(outer_distance);
-    var band: f32;
-    if blur <= 0.0 {
-        // A sharp inset is the part of the body outside the translated hole.
-        // In particular, coincident edges cancel rather than casting a halo.
-        band = stroke_coverage(outer_distance, hole_distance);
-    } else {
-        // Retain at least a physical pixel of AA at the blurred hole boundary.
-        let extent = max(blur, 0.5);
-        band = outer * smoothstep(-extent, extent, hole_distance);
-    }
-    return fill * outer + (shadow - fill * shadow.a) * band;
+// The fill with an inset shadow over it; the shadow's `band` is a share of the
+// quad's coverage, so the quad's edge still masks the result exactly once.
+fn inset_shadow_over(fill: vec4<f32>, shadow: vec4<f32>, band: f32) -> vec4<f32> {
+    return fill + (shadow - fill * shadow.a) * band;
 }
 
-fn outset_shadow_alpha(distance: f32, blur: f32) -> f32 {
-    // smoothstep with equal edges is undefined (not a hard-edged shadow).
-    if blur <= 0.0 {
-        return edge_coverage(distance);
+// The standard normal CDF, from Abramowitz and Stegun's erf 7.1.26 (error < 1.5e-7).
+fn normal_cdf(x: f32) -> f32 {
+    let z = abs(x) * 0.70710678;
+    let t = 1.0 / (1.0 + 0.3275911 * z);
+    let polynomial = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+    let erf = 1.0 - polynomial * exp(-z * z);
+    return 0.5 + 0.5 * select(-erf, erf, x >= 0.0);
+}
+
+// How far in from its sides a corner of `radius` (horizontal, vertical) is at
+// `depth` below (or above) its edge.
+fn corner_inset(radius: vec2<f32>, depth: f32) -> f32 {
+    if depth >= radius.y || radius.x <= 0.0 {
+        return 0.0;
     }
-    return 1.0 - smoothstep(-blur, blur, max(distance, 0.0));
+    let t = 1.0 - depth / radius.y;
+    return radius.x * (1.0 - sqrt(max(1.0 - t * t, 0.0)));
+}
+
+// The horizontal extent at height `y` of the box from `lo` to `hi`, whose corners
+// have horizontal radii `rx` and vertical radii `ry` [tl, tr, br, bl].
+fn box_span(y: f32, lo: vec2<f32>, hi: vec2<f32>, rx: vec4<f32>, ry: vec4<f32>) -> vec2<f32> {
+    let top = y - lo.y;
+    let bottom = hi.y - y;
+    let left = max(corner_inset(vec2(rx.x, ry.x), top), corner_inset(vec2(rx.w, ry.w), bottom));
+    let right = max(corner_inset(vec2(rx.y, ry.y), top), corner_inset(vec2(rx.z, ry.z), bottom));
+    return vec2(lo.x + left, hi.x - right);
+}
+
+// The share of the blurred box that rows `first`..`last` give `p`, summed over
+// sixteen slices of the rows the Gaussian reaches (three deviations each way).
+fn blurred_rows(p: vec2<f32>, first: f32, last: f32, lo: vec2<f32>, hi: vec2<f32>, rx: vec4<f32>, ry: vec4<f32>, sigma: f32) -> f32 {
+    let a = max(first, p.y - 3.0 * sigma);
+    let b = min(last, p.y + 3.0 * sigma);
+    if b <= a {
+        return 0.0;
+    }
+
+    // Four deviations clear of every span's ends, each row gives all of its
+    // Gaussian weight or none.
+    let reach = 4.0 * sigma;
+    let widest = max(max(rx.x, rx.w), max(rx.y, rx.z));
+    if p.x < lo.x - reach || p.x > hi.x + reach {
+        return 0.0;
+    }
+    if p.x > lo.x + widest + reach && p.x < hi.x - widest - reach {
+        return normal_cdf((b - p.y) / sigma) - normal_cdf((a - p.y) / sigma);
+    }
+
+    let step = (b - a) / 16.0;
+    var below = normal_cdf((a - p.y) / sigma);
+    var alpha = 0.0;
+    for (var i = 1; i <= 16; i++) {
+        let above = normal_cdf((a + f32(i) * step - p.y) / sigma);
+        let span = box_span(a + (f32(i) - 0.5) * step, lo, hi, rx, ry);
+        alpha += (above - below) * (normal_cdf((span.y - p.x) / sigma) - normal_cdf((span.x - p.x) / sigma));
+        below = above;
+    }
+    return alpha;
+}
+
+// Coverage at `p` of the box from `lo` to `hi` (corner radii `rx`, `ry`) blurred
+// by a Gaussian of standard deviation `sigma`, as CSS blurs a box-shadow. Rows
+// clear of the corners are integrated exactly, the rest in slices.
+fn blurred_box(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>, rx: vec4<f32>, ry: vec4<f32>, sigma: f32) -> f32 {
+    if hi.x <= lo.x || hi.y <= lo.y {
+        return 0.0;
+    }
+    let top = max(ry.x, ry.y);
+    let bottom = max(ry.z, ry.w);
+    if top + bottom >= hi.y - lo.y {
+        return blurred_rows(p, lo.y, hi.y, lo, hi, rx, ry, sigma);
+    }
+    let a = max(lo.y + top, p.y - 3.0 * sigma);
+    let b = min(hi.y - bottom, p.y + 3.0 * sigma);
+    var straight = 0.0;
+    if b > a {
+        straight = (normal_cdf((b - p.y) / sigma) - normal_cdf((a - p.y) / sigma))
+            * (normal_cdf((hi.x - p.x) / sigma) - normal_cdf((lo.x - p.x) / sigma));
+    }
+    return straight
+        + blurred_rows(p, lo.y, lo.y + top, lo, hi, rx, ry, sigma)
+        + blurred_rows(p, hi.y - bottom, hi.y, lo, hi, rx, ry, sigma);
+}
+
+// CSS's corner radii for a shadow whose box grows by `outset` (shrinks when
+// negative): a corner tighter than the outset grows by less, so a square corner
+// stays square.
+fn spread_radii(radii: vec4<f32>, outset: f32) -> vec4<f32> {
+    if outset <= 0.0 {
+        return max(radii + vec4(outset), vec4(0.0));
+    }
+    let r = min(radii / outset, vec4(1.0)) - vec4(1.0);
+    return radii + outset * (vec4(1.0) + r * r * r);
+}
+
+// What an outset box-shadow covers at `p`: the box at `pos` with `size` and
+// `radii`, moved by `offset`, grown by `spread` and blurred by a Gaussian of
+// standard deviation half `blur`.
+fn outset_shadow_alpha(p: vec2<f32>, pos: vec2<f32>, size: vec2<f32>, radii: vec4<f32>, offset: vec2<f32>, blur: f32, spread: f32) -> f32 {
+    let lo = pos + offset - vec2(spread);
+    let hi = pos + size + offset + vec2(spread);
+    let corners = spread_radii(radii, spread);
+    // A deviation under a quarter pixel is too small to see: draw it sharp.
+    if blur < 0.5 {
+        if hi.x <= lo.x || hi.y <= lo.y {
+            return 0.0;
+        }
+        return edge_coverage(rounded_box_sdf(-(p - (lo + hi) * 0.5) * 2.0, hi - lo, corners * 2.0) / 2.0);
+    }
+    return blurred_box(p, lo, hi, corners, corners, blur * 0.5);
+}
+
+// How much of an inset box-shadow shows at `p`, as a share of the quad's
+// coverage (`outer_distance`). It fills the padding box (`padding_distance`;
+// `lo` to `hi` with corner radii `rx`, `ry`) but for a hole: the padding box
+// moved by `offset`, shrunk by `spread` and blurred by half `blur`.
+fn inset_shadow_band(p: vec2<f32>, outer_distance: f32, padding_distance: f32, lo: vec2<f32>, hi: vec2<f32>, rx: vec4<f32>, ry: vec4<f32>, offset: vec2<f32>, blur: f32, spread: f32) -> f32 {
+    let hole_lo = lo + offset + vec2(spread);
+    let hole_hi = hi + offset - vec2(spread);
+    let hole_rx = spread_radii(rx, -spread);
+    let hole_ry = spread_radii(ry, -spread);
+    var band: f32;
+    if blur < 0.5 {
+        // The padding box outside the hole, so coincident edges cancel rather
+        // than casting a halo.
+        var hole = 1.0e5;
+        if hole_hi.x > hole_lo.x && hole_hi.y > hole_lo.y {
+            hole = rounded_box_sdf(-(p - (hole_lo + hole_hi) * 0.5) * 2.0, hole_hi - hole_lo, min(hole_rx, hole_ry) * 2.0) / 2.0;
+        }
+        band = stroke_coverage(padding_distance, hole);
+    } else {
+        band = edge_coverage(padding_distance) * (1.0 - blurred_box(p, hole_lo, hole_hi, hole_rx, hole_ry, blur * 0.5));
+    }
+    return min(band / max(edge_coverage(outer_distance), 0.001), 1.0);
 }
 
 // Coverage (1 = keep, 0 = discard) of a fragment under the layer's rounded

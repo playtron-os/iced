@@ -1,6 +1,9 @@
 use crate::{Color, Vector};
 
-/// A shadow.
+/// A shadow, painted as CSS paints a `box-shadow`.
+///
+/// An outset shadow shows only outside the box casting it; an inset one fills
+/// the box's padding box (inside its border) outside the shape it would cast.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Shadow {
@@ -11,12 +14,17 @@ pub struct Shadow {
     pub offset: Vector,
 
     /// The blur radius of the shadow.
+    ///
+    /// As in CSS, the shadow is blurred by a Gaussian whose standard deviation
+    /// is half this radius, so it fades over about one and a half radii.
     pub blur_radius: f32,
 
     /// The spread radius of the shadow.
     ///
     /// Positive values expand the shadow outward (larger than the element).
     /// Negative values contract the shadow inward (smaller than the element).
+    /// Its corners grow and shrink with it as CSS's do: a square corner stays
+    /// square.
     pub spread_radius: f32,
 
     /// Whether the shadow is inset (inside the element) or outset (outside).
