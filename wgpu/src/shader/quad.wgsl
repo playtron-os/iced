@@ -29,6 +29,14 @@ fn stroke_coverage(outer_distance: f32, inner_distance: f32) -> f32 {
     return max(edge_coverage(outer_distance) - edge_coverage(inner_distance), 0.0);
 }
 
+// Border widths in physical pixels, snapped as CSS snaps a border width to
+// device pixels: down to a whole pixel, but a border thinner than a pixel is
+// one pixel wide rather than a faint anti-aliased line.
+fn snap_border_widths(widths: vec4<f32>) -> vec4<f32> {
+    let hairline = widths > vec4(0.0) & widths < vec4(1.0);
+    return select(floor(widths + vec4(1.0e-5)), vec4(1.0), hairline);
+}
+
 // Signed distance from `frag_pos` to the padding edge of the box at `pos` with
 // `size`: inset by `widths` [top, right, bottom, left], each corner shrunk on
 // each axis by the width of the side it meets, as CSS does, so a corner between

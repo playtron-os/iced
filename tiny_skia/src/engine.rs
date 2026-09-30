@@ -50,7 +50,10 @@ impl Engine {
         let transform = into_transform(transformation);
 
         // Resolve per-side border widths
-        let border_widths = quad.border.widths();
+        let border_widths = quad
+            .border
+            .widths()
+            .map(|width| snap_border_width(width, transformation.scale_factor()));
         let max_border_width = border_widths[0]
             .max(border_widths[1])
             .max(border_widths[2])
@@ -659,6 +662,19 @@ fn into_transform(transformation: Transformation) -> tiny_skia::Transform {
         sy: transformation.scale_factor(),
         tx: translation.x,
         ty: translation.y,
+    }
+}
+
+/// A border `width` snapped as CSS snaps a border width to device pixels at
+/// `scale`: down to a whole pixel, but a border thinner than a pixel is one
+/// pixel wide rather than a faint anti-aliased line.
+fn snap_border_width(width: f32, scale: f32) -> f32 {
+    let physical = width * scale;
+
+    if physical > 0.0 && physical < 1.0 {
+        1.0 / scale
+    } else {
+        (physical + 1.0e-5).floor() / scale
     }
 }
 
@@ -1486,6 +1502,31 @@ mod tests {
             draw_translated(&mut drawn.as_mut(), x, y, &shadow, &mask);
 
             assert!(drawn.data() == expected.data(), "at ({x}, {y})");
+        }
+    }
+
+    /// Border widths snap to device pixels as Chrome snaps them: a hairline is
+    /// one pixel, anything wider is floored to whole pixels.
+    #[test]
+    fn border_widths_snap_to_device_pixels() {
+        for (width, scale, pixels) in [
+            (0.5, 1.0, 1.0),
+            (0.25, 2.0, 1.0),
+            (0.5, 1.5, 1.0),
+            (1.0, 1.5, 1.0),
+            (1.5, 1.0, 1.0),
+            (1.5, 1.5, 2.0),
+            (1.5, 2.0, 3.0),
+            (1.3333, 1.5, 1.0),
+            (2.5, 1.0, 2.0),
+            (0.0, 2.0, 0.0),
+        ] {
+            let snapped = snap_border_width(width, scale) * scale;
+
+            assert!(
+                (snapped - pixels).abs() < 1e-4,
+                "{width}px at {scale}x is {snapped} device pixels, not {pixels}"
+            );
         }
     }
 
