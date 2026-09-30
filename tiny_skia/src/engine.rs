@@ -2,6 +2,7 @@ use crate::Primitive;
 use crate::core::renderer::Quad;
 use crate::core::{Background, Color, Gradient, Point, Rectangle, Size, Transformation, Vector};
 use crate::graphics::{Image, Text};
+use crate::shadow;
 use crate::text;
 
 #[derive(Debug)]
@@ -37,7 +38,7 @@ impl Engine {
     ) {
         let physical_bounds = quad.bounds * transformation;
         let shadow_bounds =
-            (quad.shadow.color.a > 0.0).then(|| shadow_bounds(quad) * transformation);
+            (quad.shadow.color.a > 0.0).then(|| shadow::bounds(quad) * transformation);
         let fill_damaged = clip_bounds.intersects(&physical_bounds);
 
         // A shadow reaches past its quad, so damage on the shadow alone must still
@@ -49,7 +50,10 @@ impl Engine {
         let transform = into_transform(transformation);
 
         // Resolve per-side border widths
-        let border_widths = quad.border.widths();
+        let border_widths = quad
+            .border
+            .widths()
+            .map(|width| snap_border_width(width, transformation.scale_factor()));
         let max_border_width = border_widths[0]
             .max(border_widths[1])
             .max(border_widths[2])
@@ -70,24 +74,32 @@ impl Engine {
 
         let path = rounded_rectangle(quad.bounds, fill_border_radius);
 
-        if let Some(bounds) = shadow_bounds
-            && let Some((x, y, pixmap)) = shadow_pixmap(
-                quad,
-                bounds,
-                fill_border_radius,
-                transformation,
-                clip_bounds,
-            )
-        {
-            draw_translated(pixels, x, y, &pixmap, clip_mask);
+        let shadow = |pixels: &mut tiny_skia::PixmapMut<'_>, mask: &tiny_skia::Mask| {
+            if let Some(bounds) = shadow_bounds
+                && let Some((x, y, pixmap)) = shadow::pixmap(
+                    quad,
+                    bounds,
+                    fill_border_radius,
+                    transformation,
+                    clip_bounds,
+                )
+            {
+                draw_translated(pixels, x, y, &pixmap, mask);
+            }
+        };
+
+        // An outset shadow goes under the quad, an inset one over its background
+        // and under its border.
+        if !quad.shadow.inset {
+            shadow(pixels, clip_mask);
         }
 
         if !fill_damaged {
             return;
         }
 
-        let clip_mask =
-            (force_clip || !physical_bounds.is_within(&clip_bounds)).then_some(clip_mask as &_);
+        let mask: &tiny_skia::Mask = clip_mask;
+        let clip_mask = (force_clip || !physical_bounds.is_within(&clip_bounds)).then_some(mask);
 
         let paint = tiny_skia::Paint {
             shader: match background {
@@ -180,6 +192,10 @@ impl Engine {
                 transform,
                 clip_mask,
             );
+        }
+
+        if quad.shadow.inset {
+            shadow(pixels, mask);
         }
 
         if border_width > 0.0 {
@@ -647,6 +663,19 @@ fn into_transform(transformation: Transformation) -> tiny_skia::Transform {
         sy: transformation.scale_factor(),
         tx: translation.x,
         ty: translation.y,
+    }
+}
+
+/// A border `width` snapped as CSS snaps a border width to device pixels at
+/// `scale`: down to a whole pixel, but a border thinner than a pixel is one
+/// pixel wide rather than a faint anti-aliased line.
+fn snap_border_width(width: f32, scale: f32) -> f32 {
+    let physical = width * scale;
+
+    if physical > 0.0 && physical < 1.0 {
+        1.0 / scale
+    } else {
+        (physical + 1.0e-5).floor() / scale
     }
 }
 
@@ -1144,124 +1173,6 @@ fn source_over(
     ])
 }
 
-/// The area `quad`'s shadow covers, in its own coordinates.
-fn shadow_bounds(quad: &Quad) -> Rectangle {
-    let shadow = quad.shadow;
-    let spread = shadow.spread_radius.max(0.0);
-
-    Rectangle {
-        x: quad.bounds.x + shadow.offset.x - shadow.blur_radius - spread,
-        y: quad.bounds.y + shadow.offset.y - shadow.blur_radius - spread,
-        width: quad.bounds.width + shadow.blur_radius * 2.0 + spread * 2.0,
-        height: quad.bounds.height + shadow.blur_radius * 2.0 + spread * 2.0,
-    }
-}
-
-/// The part of `quad`'s shadow inside `clip_bounds`, and where it goes.
-///
-/// Shaded per pixel on every draw, so only the damaged part is: shading all of a
-/// menu's shadow for a caret blink cost ~88ms a frame at 2x in a debug build.
-fn shadow_pixmap(
-    quad: &Quad,
-    shadow_bounds: Rectangle,
-    radii: [f32; 4],
-    transformation: Transformation,
-    clip_bounds: Rectangle,
-) -> Option<(i32, i32, tiny_skia::Pixmap)> {
-    let shadow = quad.shadow;
-    let scale = transformation.scale_factor();
-    let physical_bounds = quad.bounds * transformation;
-    let spread = shadow.spread_radius;
-    let radii = radii.map(|radius| (radius + spread).max(0.0) * scale);
-    let half_width = physical_bounds.width / 2.0 + spread * scale;
-    let half_height = physical_bounds.height / 2.0 + spread * scale;
-    let size = tiny_skia::Size::from_wh(half_width, half_height)?;
-
-    // The whole shadow's pixel grid, cut down to the damage.
-    let (x0, y0) = (shadow_bounds.x as u32, shadow_bounds.y as u32);
-    let x1 = x0 + shadow_bounds.width as u32;
-    let y1 = y0 + shadow_bounds.height as u32;
-    let left = x0.max(clip_bounds.x.max(0.0).floor() as u32);
-    let top = y0.max(clip_bounds.y.max(0.0).floor() as u32);
-    let right = x1.min((clip_bounds.x + clip_bounds.width).max(0.0).ceil() as u32);
-    let bottom = y1.min((clip_bounds.y + clip_bounds.height).max(0.0).ceil() as u32);
-    let region = tiny_skia::IntSize::from_wh(right.checked_sub(left)?, bottom.checked_sub(top)?)?;
-
-    let color = into_color(shadow.color);
-    let offset_x = shadow.offset.x * scale;
-    let offset_y = shadow.offset.y * scale;
-    let blur = shadow.blur_radius * scale;
-
-    // Only alpha varies across a shadow, and it lands on one of 256 values once
-    // rounded, so each pixel is a lookup rather than a colour conversion.
-    let rgb = color.to_color_u8();
-    let shades: [tiny_skia::PremultipliedColorU8; 256] = std::array::from_fn(|alpha| {
-        tiny_skia::ColorU8::from_rgba(rgb.red(), rgb.green(), rgb.blue(), alpha as u8).premultiply()
-    });
-    let shade = |distance: f32| {
-        let mut color = color;
-        color.apply_opacity(1.0 - smoothstep(-blur, blur, distance));
-        shades[(color.alpha() * 255.0 + 0.5) as usize]
-    };
-
-    // A pixel a whole pixel inside the box sits at distance 0 whatever its corner
-    // radius, so the interior is one colour and needs no distance of its own.
-    let interior = shade(0.0);
-    let max_radius = radii.iter().copied().fold(0.0, f32::max);
-    let inner_width = half_width - max_radius - 1.0;
-    let inner_height = half_height - 1.0;
-    let center_x = physical_bounds.x + offset_x + half_width;
-    let center_y = physical_bounds.y + offset_y + half_height;
-
-    let mut colors = Vec::with_capacity(region.width() as usize * region.height() as usize);
-
-    let shade_at = |x: u32, to_center_y: f32| {
-        let to_center_x = x as f32 - physical_bounds.x - offset_x - half_width;
-        shade(rounded_box_sdf(Vector::new(to_center_x, to_center_y), size, &radii).max(0.0))
-    };
-
-    for y in top..bottom {
-        let to_center_y = y as f32 - physical_bounds.y - offset_y - half_height;
-        // The interior span of this row, filled in one go; the margin above keeps
-        // a pixel rounded to either side of its ends correct.
-        let (from, to) = if (y as f32 - center_y).abs() <= inner_height {
-            let from = ((center_x - inner_width).ceil().max(left as f32) as u32).min(right);
-            let to = ((center_x + inner_width).floor() + 1.0).max(from as f32) as u32;
-            (from, to.min(right))
-        } else {
-            (right, right)
-        };
-
-        colors.extend((left..from).map(|x| shade_at(x, to_center_y)));
-        colors.extend(std::iter::repeat_n(interior, (to - from) as usize));
-        colors.extend((to..right).map(|x| shade_at(x, to_center_y)));
-    }
-
-    let pixmap = tiny_skia::Pixmap::from_vec(bytemuck::cast_vec(colors), region)?;
-
-    Some((left as i32, top as i32, pixmap))
-}
-
-fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
-    let x = ((x - a) / (b - a)).clamp(0.0, 1.0);
-
-    x * x * (3.0 - 2.0 * x)
-}
-
-fn rounded_box_sdf(to_center: Vector, size: tiny_skia::Size, radii: &[f32]) -> f32 {
-    let radius = match (to_center.x > 0.0, to_center.y > 0.0) {
-        (true, true) => radii[2],
-        (true, false) => radii[1],
-        (false, true) => radii[3],
-        (false, false) => radii[0],
-    };
-
-    let x = (to_center.x.abs() - size.width() + radius).max(0.0);
-    let y = (to_center.y.abs() - size.height() + radius).max(0.0);
-
-    (x * x + y * y).sqrt() - radius
-}
-
 pub fn adjust_clip_mask(clip_mask: &mut tiny_skia::Mask, bounds: Rectangle) {
     clip_mask.clear();
 
@@ -1308,7 +1219,7 @@ pub fn adjust_clip_mask_rounded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{Border, Shadow};
+    use crate::core::{Border, Shadow, Vector};
 
     fn card() -> Quad {
         Quad {
@@ -1340,155 +1251,22 @@ mod tests {
         height: 1000.0,
     };
 
-    fn rounded_box_sdf_as_before(to_center: Vector, size: tiny_skia::Size, radii: &[f32]) -> f32 {
-        let radius = match (to_center.x > 0.0, to_center.y > 0.0) {
-            (true, true) => radii[2],
-            (true, false) => radii[1],
-            (false, true) => radii[3],
-            (false, false) => radii[0],
-        };
-
-        let x = (to_center.x.abs() - size.width() + radius).max(0.0);
-        let y = (to_center.y.abs() - size.height() + radius).max(0.0);
-
-        (x.powf(2.0) + y.powf(2.0)).sqrt() - radius
-    }
-
-    /// The shading as it was written before it was cut down to the damage.
-    fn whole_shadow_as_before(
-        quad: &Quad,
-        fill_radii: [f32; 4],
-        transformation: Transformation,
-    ) -> Vec<u8> {
-        let shadow = quad.shadow;
-        let physical_bounds = quad.bounds * transformation;
-        let bounds = shadow_bounds(quad) * transformation;
-        let spread = shadow.spread_radius;
-        let radii: Vec<f32> = fill_radii
-            .into_iter()
-            .map(|radius| (radius + spread).max(0.0) * transformation.scale_factor())
-            .collect();
-        let (x, y, width, height) = (
-            bounds.x as u32,
-            bounds.y as u32,
-            bounds.width as u32,
-            bounds.height as u32,
-        );
-        let half_width = physical_bounds.width / 2.0 + spread * transformation.scale_factor();
-        let half_height = physical_bounds.height / 2.0 + spread * transformation.scale_factor();
-        let colors: Vec<tiny_skia::PremultipliedColorU8> = (y..y + height)
-            .flat_map(|y| (x..x + width).map(move |x| (x as f32, y as f32)))
-            .filter_map(|(x, y)| {
-                tiny_skia::Size::from_wh(half_width, half_height).map(|size| {
-                    let distance = rounded_box_sdf_as_before(
-                        Vector::new(
-                            x - physical_bounds.position().x
-                                - (shadow.offset.x * transformation.scale_factor())
-                                - half_width,
-                            y - physical_bounds.position().y
-                                - (shadow.offset.y * transformation.scale_factor())
-                                - half_height,
-                        ),
-                        size,
-                        &radii,
-                    )
-                    .max(0.0);
-                    let alpha = 1.0
-                        - smoothstep(
-                            -shadow.blur_radius * transformation.scale_factor(),
-                            shadow.blur_radius * transformation.scale_factor(),
-                            distance,
-                        );
-                    let mut color = into_color(shadow.color);
-                    color.apply_opacity(alpha);
-                    color.to_color_u8().premultiply()
-                })
-            })
-            .collect();
-        bytemuck::cast_vec(colors)
-    }
-
-    /// The interior shortcut, the alpha table and `x * x` must not move a pixel.
-    #[test]
-    fn an_unclipped_shadow_is_shaded_exactly_as_before() {
-        let uneven = Quad {
-            bounds: Rectangle {
-                x: 33.3,
-                y: 21.7,
-                width: 97.9,
-                height: 60.2,
-            },
-            border: Border {
-                radius: crate::core::border::Radius {
-                    top_left: 0.0,
-                    top_right: 4.0,
-                    bottom_right: 20.0,
-                    bottom_left: 8.5,
-                },
-                ..Border::default()
-            },
-            shadow: Shadow {
-                color: Color::from_rgba(0.2, 0.1, 0.4, 0.7),
-                offset: Vector::new(3.0, -2.5),
-                blur_radius: 6.0,
-                spread_radius: -3.0,
-                ..Shadow::default()
-            },
-            ..Quad::default()
-        };
-        let square = Quad {
-            border: Border::default(),
-            shadow: Shadow {
-                blur_radius: 1.0,
-                spread_radius: 0.0,
-                ..card().shadow
-            },
-            ..card()
-        };
-
-        for (quad, scale) in [
-            (card(), 1.0),
-            (card(), 2.0),
-            (uneven, 1.5),
-            (uneven, 2.0),
-            (square, 1.0),
-        ] {
-            let transformation = Transformation::scale(scale);
-            let bounds = shadow_bounds(&quad) * transformation;
-            let mut radii = <[f32; 4]>::from(quad.border.radius);
-            for radius in &mut radii {
-                *radius = radius
-                    .min(quad.bounds.width / 2.0)
-                    .min(quad.bounds.height / 2.0);
-            }
-            let (x, y, pixmap) =
-                shadow_pixmap(&quad, bounds, radii, transformation, EVERYTHING).unwrap();
-
-            assert_eq!((x, y), (bounds.x as i32, bounds.y as i32));
-            assert!(
-                pixmap.data() == whole_shadow_as_before(&quad, radii, transformation),
-                "scale {scale}, bounds {:?}",
-                quad.bounds
-            );
-        }
-    }
-
     /// Damage shades only its strip, and that strip is the whole shadow's.
     #[test]
     fn a_damaged_strip_is_that_strip_of_the_whole_shadow() {
         let quad = card();
         let transformation = Transformation::scale(2.0);
-        let bounds = shadow_bounds(&quad) * transformation;
+        let bounds = shadow::bounds(&quad) * transformation;
         let radii = <[f32; 4]>::from(quad.border.radius);
         let (wx, wy, whole) =
-            shadow_pixmap(&quad, bounds, radii, transformation, EVERYTHING).unwrap();
+            shadow::pixmap(&quad, bounds, radii, transformation, EVERYTHING).unwrap();
         let strip = Rectangle {
             x: 60.5,
             y: 90.0,
             width: 170.0,
             height: 13.2,
         };
-        let (sx, sy, part) = shadow_pixmap(&quad, bounds, radii, transformation, strip).unwrap();
+        let (sx, sy, part) = shadow::pixmap(&quad, bounds, radii, transformation, strip).unwrap();
 
         assert_eq!((part.width(), part.height()), (171, 14));
         for y in 0..part.height() {
@@ -1498,7 +1276,7 @@ mod tests {
             }
         }
         let outside = Rectangle { x: 900.0, ..strip };
-        assert!(shadow_pixmap(&quad, bounds, radii, transformation, outside).is_none());
+        assert!(shadow::pixmap(&quad, bounds, radii, transformation, outside).is_none());
     }
 
     /// Filling only what the damage sees must paint exactly what filling the whole
@@ -1763,6 +1541,31 @@ mod tests {
             assert!(
                 (shade - expected).abs() <= 2.0,
                 "({x}, {y}): {shade}, not {expected}"
+            );
+        }
+    }
+
+    /// Border widths snap to device pixels as Chrome snaps them: a hairline is
+    /// one pixel, anything wider is floored to whole pixels.
+    #[test]
+    fn border_widths_snap_to_device_pixels() {
+        for (width, scale, pixels) in [
+            (0.5, 1.0, 1.0),
+            (0.25, 2.0, 1.0),
+            (0.5, 1.5, 1.0),
+            (1.0, 1.5, 1.0),
+            (1.5, 1.0, 1.0),
+            (1.5, 1.5, 2.0),
+            (1.5, 2.0, 3.0),
+            (1.3333, 1.5, 1.0),
+            (2.5, 1.0, 2.0),
+            (0.0, 2.0, 0.0),
+        ] {
+            let snapped = snap_border_width(width, scale) * scale;
+
+            assert!(
+                (snapped - pixels).abs() < 1e-4,
+                "{width}px at {scale}x is {snapped} device pixels, not {pixels}"
             );
         }
     }

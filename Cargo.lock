@@ -694,6 +694,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e79769241dcd44edf79a732545e8b5cec84c247ac060f5252cd51885d093a8fc"
 
 [[package]]
+name = "box_shadow"
+version = "0.1.0"
+dependencies = [
+ "iced",
+ "iced_test",
+ "png 0.18.1",
+]
+
+[[package]]
 name = "brotli-decompressor"
 version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1116,7 +1125,7 @@ dependencies = [
 [[package]]
 name = "cosmic-text"
 version = "0.18.0"
-source = "git+https://github.com/playtron-os/cosmic-text.git?rev=8eea8a130671cad659fbf8a8923c1a9d5a14ebc4#8eea8a130671cad659fbf8a8923c1a9d5a14ebc4"
+source = "git+https://github.com/playtron-os/cosmic-text.git?rev=0235fc76a8350daa4106a67b13f88ab544ed8079#0235fc76a8350daa4106a67b13f88ab544ed8079"
 dependencies = [
  "bitflags 2.13.1",
  "font-types 0.11.3",
@@ -1243,7 +1252,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "cryoglyph"
 version = "0.1.0"
-source = "git+https://github.com/playtron-os/cryoglyph.git?rev=1beae761d9e519932b0c74cdea832d42fd7b62e3#1beae761d9e519932b0c74cdea832d42fd7b62e3"
+source = "git+https://github.com/playtron-os/cryoglyph.git?rev=045b2a28e2c5a914d914a6fbcca08d914faed297#045b2a28e2c5a914d914a6fbcca08d914faed297"
 dependencies = [
  "cosmic-text",
  "etagere",
@@ -2225,6 +2234,15 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "hairline_border"
+version = "0.1.0"
+dependencies = [
+ "iced",
+ "iced_test",
+ "png 0.18.1",
 ]
 
 [[package]]
@@ -3428,6 +3446,15 @@ name = "lebe"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
+
+[[package]]
+name = "letter_spacing"
+version = "0.1.0"
+dependencies = [
+ "iced",
+ "iced_test",
+ "png 0.18.1",
+]
 
 [[package]]
 name = "libc"

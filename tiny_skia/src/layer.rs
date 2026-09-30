@@ -224,8 +224,7 @@ impl Layer {
                 vec![if quad.shadow.color.a > 0.0 {
                     bounds.expand(
                         quad.shadow.offset.x.abs().max(quad.shadow.offset.y.abs())
-                            + quad.shadow.blur_radius
-                            + quad.shadow.spread_radius.max(0.0),
+                            + crate::shadow::reach(&quad.shadow),
                     )
                 } else {
                     bounds

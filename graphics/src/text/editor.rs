@@ -797,7 +797,7 @@ impl editor::Editor for Editor {
 fn to_attributes(font: Font, letter_spacing: Option<f32>) -> cosmic_text::Attrs<'static> {
     let attributes = text::to_attributes(font);
     match letter_spacing {
-        Some(em) => attributes.letter_spacing(em),
+        Some(em) => text::with_letter_spacing(attributes, em),
         None => attributes,
     }
 }

@@ -75,26 +75,29 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     let snap = bool(input.flags.y);
     let border_only = input.flags.z;
 
-    // For outset shadows, expand the quad bounds to include shadow area
-    var shadow_expand = vec2<f32>(0.0, 0.0);
-    if !shadow_inset {
-        shadow_expand = min(input.shadow_offset, vec2<f32>(0.0, 0.0)) - input.shadow_blur_radius;
-    }
-
-    var pos: vec2<f32> = (input.position_and_scale.xy + shadow_expand) * globals.scale;
-    var scale_expand = vec2<f32>(0.0, 0.0);
-    if !shadow_inset {
-        scale_expand = vec2<f32>(abs(input.shadow_offset.x), abs(input.shadow_offset.y)) + input.shadow_blur_radius * 2.0;
-    }
-    var scale: vec2<f32> = (input.position_and_scale.zw + scale_expand) * globals.scale;
+    let box_pos = input.position_and_scale.xy * globals.scale;
+    let box_size = input.position_and_scale.zw * globals.scale;
 
     var pos_snap = vec2<f32>(0.0, 0.0);
     var scale_snap = vec2<f32>(0.0, 0.0);
 
     if snap {
-        pos_snap = round(pos + vec2(0.001, 0.001)) - pos;
-        scale_snap = round(pos + scale + vec2(0.001, 0.001)) - pos - pos_snap - scale;
+        pos_snap = round(box_pos + vec2(0.001, 0.001)) - box_pos;
+        scale_snap = round(box_pos + box_size + vec2(0.001, 0.001)) - box_pos - pos_snap - box_size;
     }
+
+    // An outset shadow reaches past the box by its offset and three standard
+    // deviations (half the blur radius each) of its blur.
+    var reach_before = vec2<f32>(0.0, 0.0);
+    var reach_after = vec2<f32>(0.0, 0.0);
+    if !shadow_inset {
+        let reach = 1.5 * input.shadow_blur_radius;
+        reach_before = (max(-input.shadow_offset, vec2(0.0)) + reach) * globals.scale;
+        reach_after = (max(input.shadow_offset, vec2(0.0)) + reach) * globals.scale;
+    }
+
+    let pos = box_pos + pos_snap - reach_before;
+    let scale = box_size + scale_snap + reach_before + reach_after;
 
     var min_border_radius = min(input.position_and_scale.z, input.position_and_scale.w) * 0.5;
     var border_radius: vec4<f32> = vec4<f32>(
@@ -105,10 +108,10 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     );
 
     var transform: mat4x4<f32> = mat4x4<f32>(
-        vec4<f32>(scale.x + scale_snap.x + 1.0, 0.0, 0.0, 0.0),
-        vec4<f32>(0.0, scale.y + scale_snap.y + 1.0, 0.0, 0.0),
+        vec4<f32>(scale.x + 1.0, 0.0, 0.0, 0.0),
+        vec4<f32>(0.0, scale.y + 1.0, 0.0, 0.0),
         vec4<f32>(0.0, 0.0, 1.0, 0.0),
-        vec4<f32>(pos + pos_snap - vec2<f32>(0.5, 0.5), 0.0, 1.0)
+        vec4<f32>(pos - vec2<f32>(0.5, 0.5), 0.0, 1.0)
     );
 
     out.position = globals.transform * transform * vec4<f32>(vertex_position(input.vertex_index), 0.0, 1.0);
@@ -135,7 +138,7 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.border_color_packed = pack_color_to_u32(premultiply(input.border_color));
     out.border_radius = border_radius * globals.scale;
     // WebGL2: pass max border width as uniform (per-side not supported due to varying limit)
-    let border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w)) * globals.scale;
+    let border_width = snap_border_widths(vec4(max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w)) * globals.scale)).x;
     out.shadow_color_packed = pack_color_to_u32(premultiply(input.shadow_color));
     out.shadow_offset = input.shadow_offset * globals.scale;
     // Halves keep the varying count at 31: pixel sizes need no more precision.
@@ -415,6 +418,23 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         return mixed_color * border_alpha * clip_a;
     }
 
+    // An inset shadow goes over the background and under the border.
+    if shadow_color.a > 0.0 && shadow_inset {
+        let band = inset_shadow_band(
+            input.position.xy,
+            dist,
+            dist + border_width,
+            pos + vec2(border_width),
+            pos + scale - vec2(border_width),
+            max(input.border_radius - vec4(border_width), vec4(0.0)),
+            max(input.border_radius - vec4(border_width), vec4(0.0)),
+            input.shadow_offset,
+            shadow_blur_radius,
+            0.0
+        );
+        mixed_color = inset_shadow_over(mixed_color, shadow_color, band);
+    }
+
     if (border_width > 0.0) {
         mixed_color = mix(
             mixed_color,
@@ -424,34 +444,23 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         );
     }
 
-    var quad_alpha: f32 = clamp(0.5-dist, 0.0, 1.0);
-
+    let quad_alpha = edge_coverage(dist);
     let quad_color = mixed_color * quad_alpha;
 
-    if shadow_color.a > 0.0 {
-        if shadow_inset {
-            // Inset shadow - draw inside the quad
-            var inset_shadow_dist: f32 = rounded_box_sdf(
-                -(input.position.xy - pos - input.shadow_offset - scale/2.0) * 2.0,
-                scale,
-                input.border_radius * 2.0
-            ) / 2.0;
-            // Invert the distance for inset effect
-            let inset_alpha = 1.0 - smoothstep(-shadow_blur_radius, shadow_blur_radius, max(-inset_shadow_dist, 0.0));
-            // Only apply shadow inside the quad (where quad_alpha > 0)
-            return mix(quad_color, shadow_color * quad_alpha, inset_alpha * quad_alpha) * clip_a;
-        } else {
-            // Outset shadow - draw outside the quad
-            var shadow_dist: f32 = rounded_box_sdf(
-                -(input.position.xy - pos - input.shadow_offset - scale/2.0) * 2.0,
-                scale,
-                input.border_radius * 2.0
-            ) / 2.0;
-            let shadow_alpha = 1.0 - smoothstep(-shadow_blur_radius, shadow_blur_radius, max(shadow_dist, 0.0));
+    // An outset shadow is only painted outside the box.
+    if shadow_color.a > 0.0 && !shadow_inset && quad_alpha < 1.0 {
+        let shadow_alpha = outset_shadow_alpha(
+            input.position.xy,
+            pos,
+            scale,
+            input.border_radius,
+            input.shadow_offset,
+            shadow_blur_radius,
+            0.0
+        );
 
-            return mix(quad_color, shadow_color, (1.0 - quad_alpha) * shadow_alpha) * clip_a;
-        }
-    } else {
-        return quad_color * clip_a;
+        return mix(quad_color, shadow_color, (1.0 - quad_alpha) * shadow_alpha) * clip_a;
     }
+
+    return quad_color * clip_a;
 }
