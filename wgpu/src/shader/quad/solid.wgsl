@@ -36,35 +36,37 @@ struct SolidVertexOutput {
 fn solid_vs_main(input: SolidVertexInput) -> SolidVertexOutput {
     var out: SolidVertexOutput;
 
-    // For outset shadows, expand the quad bounds to include shadow area
-    // For inset shadows, no expansion needed
-    var shadow_expand = vec2<f32>(0.0, 0.0);
-    if !bool(input.shadow_inset) {
-        shadow_expand = min(input.shadow_offset, vec2<f32>(0.0, 0.0)) - input.shadow_blur_radius - max(input.shadow_spread_radius, 0.0);
-    }
-
-    var pos: vec2<f32> = (input.pos + shadow_expand) * globals.scale;
-    var scale_expand = vec2<f32>(0.0, 0.0);
-    if !bool(input.shadow_inset) {
-        scale_expand = vec2<f32>(abs(input.shadow_offset.x), abs(input.shadow_offset.y)) + (input.shadow_blur_radius + max(input.shadow_spread_radius, 0.0)) * 2.0;
-    }
-    var scale: vec2<f32> = (input.scale + scale_expand) * globals.scale;
+    let box_pos = input.pos * globals.scale;
+    let box_size = input.scale * globals.scale;
 
     var pos_snap = vec2<f32>(0.0, 0.0);
     var scale_snap = vec2<f32>(0.0, 0.0);
 
     if bool(input.snap) {
-        pos_snap = round(pos + vec2(0.001, 0.001)) - pos;
-        scale_snap = round(pos + scale + vec2(0.001, 0.001)) - pos - pos_snap - scale;
+        pos_snap = round(box_pos + vec2(0.001, 0.001)) - box_pos;
+        scale_snap = round(box_pos + box_size + vec2(0.001, 0.001)) - box_pos - pos_snap - box_size;
     }
+
+    // An outset shadow reaches past the box by its offset, its spread and three
+    // standard deviations (half the blur radius each) of its blur.
+    var reach_before = vec2<f32>(0.0, 0.0);
+    var reach_after = vec2<f32>(0.0, 0.0);
+    if !bool(input.shadow_inset) {
+        let reach = 1.5 * input.shadow_blur_radius + max(input.shadow_spread_radius, 0.0);
+        reach_before = (max(-input.shadow_offset, vec2(0.0)) + reach) * globals.scale;
+        reach_after = (max(input.shadow_offset, vec2(0.0)) + reach) * globals.scale;
+    }
+
+    let pos = box_pos + pos_snap - reach_before;
+    let scale = box_size + scale_snap + reach_before + reach_after;
 
     let border_radius = min(input.border_radius, vec4(min(input.scale.x, input.scale.y) / 2.0));
 
     var transform: mat4x4<f32> = mat4x4<f32>(
-        vec4<f32>(scale.x + scale_snap.x + 1.0, 0.0, 0.0, 0.0),
-        vec4<f32>(0.0, scale.y + scale_snap.y + 1.0, 0.0, 0.0),
+        vec4<f32>(scale.x + 1.0, 0.0, 0.0, 0.0),
+        vec4<f32>(0.0, scale.y + 1.0, 0.0, 0.0),
         vec4<f32>(0.0, 0.0, 1.0, 0.0),
-        vec4<f32>(pos + pos_snap - vec2<f32>(0.5, 0.5), 0.0, 1.0)
+        vec4<f32>(pos - vec2<f32>(0.5, 0.5), 0.0, 1.0)
     );
 
     out.position = globals.transform * transform * vec4<f32>(vertex_position(input.vertex_index), 0.0, 1.0);
@@ -88,36 +90,26 @@ fn solid_vs_main(input: SolidVertexInput) -> SolidVertexOutput {
 fn solid_fs_main(
     input: SolidVertexOutput
 ) -> @location(0) vec4<f32> {
-    var mixed_color: vec4<f32> = input.color;
-
     var dist = rounded_box_sdf(
         -(input.position.xy - input.pos - input.scale * 0.5) * 2.0,
         input.scale,
         input.border_radius * 2.0
     ) / 2.0;
 
-    let max_border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w));
+    let bw = input.border_widths; // [top, right, bottom, left]
+    let max_border_width = max(max(bw.x, bw.y), max(bw.z, bw.w));
 
-    if (max_border_width > 0.0) {
-        // A dashed border shows the fill in its gaps.
-        let dash = dash_coverage(input.position.xy, input.pos, input.scale, input.border_radius, input.border_dash);
+    // Uniform borders can reuse the outer distance for their inner edge.
+    let all_equal = bw.x == bw.y && bw.y == bw.z && bw.z == bw.w;
 
-        // Uniform borders can reuse the outer distance for their inner edge.
-        let all_equal = input.border_widths.x == input.border_widths.y
-            && input.border_widths.y == input.border_widths.z
-            && input.border_widths.z == input.border_widths.w;
-
+    var padding_dist = dist;
+    if max_border_width > 0.0 {
         if all_equal {
-            mixed_color = mix(
-                input.color,
-                input.border_color,
-                border_fraction(dist, dist + input.border_widths.x) * dash
-            );
+            padding_dist = dist + bw.x;
         } else {
             // Per-side border using inner rounded rect SDF.
             // The border region is between the outer and inner rounded rects,
             // so borders naturally curve with the corner radii.
-            let bw = input.border_widths; // [top, right, bottom, left]
 
             // Inner rect is inset by per-side widths.
             let inner_scale = input.scale - vec2(bw.w + bw.y, bw.x + bw.z);
@@ -131,51 +123,62 @@ fn solid_fs_main(
                 max(bw.z, bw.w)  // bottom-left
             ));
 
-            let inner_dist = rounded_box_sdf(
+            padding_dist = rounded_box_sdf(
                 -(input.position.xy - inner_pos - inner_scale * 0.5) * 2.0,
                 inner_scale,
                 inner_radii * 2.0
             ) / 2.0;
-
-            // Border coverage = fraction of visible pixel in border region.
-            // Where inner and outer edges coincide (0-width sides), both coverages
-            // cancel out, producing no border artifact.
-            mixed_color = mix(input.color, input.border_color, border_fraction(dist, inner_dist) * dash);
         }
     }
 
-    var quad_alpha: f32 = clamp(0.5-dist, 0.0, 1.0);
+    // An inset shadow goes over the background and under the border.
+    var fill = input.color;
+    if input.shadow_color.a > 0.0 && bool(input.shadow_inset) {
+        let band = inset_shadow_band(
+            input.position.xy,
+            dist,
+            padding_dist,
+            input.pos + vec2(bw.w, bw.x),
+            input.pos + input.scale - vec2(bw.y, bw.z),
+            max(input.border_radius - vec4(bw.w, bw.y, bw.y, bw.w), vec4(0.0)),
+            max(input.border_radius - vec4(bw.x, bw.x, bw.z, bw.z), vec4(0.0)),
+            input.shadow_offset,
+            input.shadow_blur_radius,
+            input.shadow_spread_radius
+        );
+        fill = inset_shadow_over(fill, input.shadow_color, band);
+    }
 
+    var mixed_color = fill;
+    if max_border_width > 0.0 {
+        // A dashed border shows the fill in its gaps.
+        let dash = dash_coverage(input.position.xy, input.pos, input.scale, input.border_radius, input.border_dash);
+
+        // Where inner and outer edges coincide (0-width sides), both coverages
+        // cancel out, producing no border artifact.
+        mixed_color = mix(fill, input.border_color, border_fraction(dist, padding_dist) * dash);
+    }
+
+    let quad_alpha = edge_coverage(dist);
     let quad_color = mixed_color * quad_alpha;
 
     // Trim the fragment (fill + shadow) to the layer's rounded clip.
     let clip_a = layer_clip_alpha(input.position.xy);
 
-    if input.shadow_color.a > 0.0 {
-        if bool(input.shadow_inset) {
-            // Inset shadow - draw inside the quad
-            // Spread contracts the inset shadow shape (positive spread = larger shadow area inside)
-            let inset_spread = input.shadow_spread_radius;
-            var inset_shadow_dist: f32 = rounded_box_sdf(
-                -(input.position.xy - input.pos - input.shadow_offset - input.scale/2.0) * 2.0,
-                input.scale - vec2(inset_spread * 2.0),
-                max(input.border_radius * 2.0 - vec4(inset_spread * 2.0), vec4(0.0))
-            ) / 2.0;
-            return inset_shadow_over(mixed_color, input.shadow_color, dist, inset_shadow_dist, input.shadow_blur_radius) * clip_a;
-        } else {
-            // Outset shadow - draw outside the quad
-            // Spread expands the shadow shape (positive = larger shadow, negative = smaller)
-            let spread = input.shadow_spread_radius;
-            var shadow_dist: f32 = rounded_box_sdf(
-                -(input.position.xy - input.pos - input.shadow_offset - input.scale/2.0) * 2.0,
-                input.scale + vec2(spread * 2.0),
-                max(input.border_radius * 2.0 + vec4(spread * 2.0), vec4(0.0))
-            ) / 2.0;
-            let shadow_alpha = outset_shadow_alpha(shadow_dist, input.shadow_blur_radius);
+    // An outset shadow is only painted outside the box.
+    if input.shadow_color.a > 0.0 && !bool(input.shadow_inset) && quad_alpha < 1.0 {
+        let shadow_alpha = outset_shadow_alpha(
+            input.position.xy,
+            input.pos,
+            input.scale,
+            input.border_radius,
+            input.shadow_offset,
+            input.shadow_blur_radius,
+            input.shadow_spread_radius
+        );
 
-            return mix(quad_color, input.shadow_color, (1.0 - quad_alpha) * shadow_alpha) * clip_a;
-        }
-    } else {
-        return quad_color * clip_a;
+        return mix(quad_color, input.shadow_color, (1.0 - quad_alpha) * shadow_alpha) * clip_a;
     }
+
+    return quad_color * clip_a;
 }
