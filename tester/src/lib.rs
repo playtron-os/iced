@@ -857,7 +857,7 @@ where
     stack![
         container(
             slider(range, current, on_change)
-                .step(10.0)
+                .step(10.0_f32)
                 .width(Fill)
                 .height(24)
                 .style(|theme: &core::Theme, status| {

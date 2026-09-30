@@ -137,7 +137,7 @@ impl App {
                 self.static_opacity,
                 Message::StaticOpacityChanged,
             )
-            .step(0.01)
+            .step(0.01_f32)
             .width(200);
 
             let demo_box = opacity(
@@ -160,7 +160,7 @@ impl App {
             let duration_slider = slider(100.0..=2000.0, self.animation_duration_ms as f32, |v| {
                 Message::DurationChanged(v)
             })
-            .step(50.0)
+            .step(50.0_f32)
             .width(200);
 
             let fade_in_btn = button(text("Fade In"))

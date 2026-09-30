@@ -155,10 +155,10 @@ pub fn font_database() -> Arc<cosmic_text::fontdb::Database> {
 
     let mut cached = DATABASE.lock().expect("Lock font database");
 
-    if let Some((at, database)) = cached.as_ref() {
-        if *at == version {
-            return Arc::clone(database);
-        }
+    if let Some((at, database)) = cached.as_ref()
+        && *at == version
+    {
+        return Arc::clone(database);
     }
 
     let database = Arc::new(font_system.raw().db().clone());
