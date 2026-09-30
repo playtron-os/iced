@@ -107,27 +107,14 @@ fn solid_fs_main(
         if all_equal {
             padding_dist = dist + bw.x;
         } else {
-            // Per-side border using inner rounded rect SDF.
-            // The border region is between the outer and inner rounded rects,
-            // so borders naturally curve with the corner radii.
-
-            // Inner rect is inset by per-side widths.
-            let inner_scale = input.scale - vec2(bw.w + bw.y, bw.x + bw.z);
-            let inner_pos = input.pos + vec2(bw.w, bw.x);
-
-            // Inner corner radii shrink by the max of the two adjacent border widths.
-            let inner_radii = max(vec4(0.0), input.border_radius - vec4(
-                max(bw.x, bw.w), // top-left
-                max(bw.x, bw.y), // top-right
-                max(bw.z, bw.y), // bottom-right
-                max(bw.z, bw.w)  // bottom-left
-            ));
-
-            padding_dist = rounded_box_sdf(
-                -(input.position.xy - inner_pos - inner_scale * 0.5) * 2.0,
-                inner_scale,
-                inner_radii * 2.0
-            ) / 2.0;
+            // The border region is between the outline and the padding edge.
+            padding_dist = padding_edge_distance(
+                input.position.xy,
+                input.pos,
+                input.scale,
+                input.border_radius,
+                bw
+            );
         }
     }
 
