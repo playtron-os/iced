@@ -440,44 +440,15 @@ pub fn into_paint(style: Style) -> tiny_skia::Paint<'static> {
                     )
                     .expect("Create linear gradient")
                 }
-                Gradient::Radial(radial) => {
-                    let stops: Vec<tiny_skia::GradientStop> = radial
+                Gradient::Radial(radial) => crate::engine::elliptical_gradient(
+                    radial.center,
+                    Vector::new(radial.radius_x, radial.radius_y),
+                    radial
                         .stops
                         .into_iter()
                         .flatten()
-                        .map(|stop| {
-                            tiny_skia::GradientStop::new(
-                                stop.offset,
-                                tiny_skia::Color::from_rgba(
-                                    stop.color.b,
-                                    stop.color.g,
-                                    stop.color.r,
-                                    stop.color.a,
-                                )
-                                .expect("Create color"),
-                            )
-                        })
-                        .collect();
-
-                    let center = tiny_skia::Point {
-                        x: radial.center.x,
-                        y: radial.center.y,
-                    };
-
-                    tiny_skia::RadialGradient::new(
-                        center,
-                        center,
-                        radial.radius_x.max(radial.radius_y),
-                        if stops.is_empty() {
-                            vec![tiny_skia::GradientStop::new(0.0, tiny_skia::Color::BLACK)]
-                        } else {
-                            stops
-                        },
-                        tiny_skia::SpreadMode::Pad,
-                        tiny_skia::Transform::identity(),
-                    )
-                    .expect("Create radial gradient")
-                }
+                        .map(|stop| (stop.offset, stop.color)),
+                ),
                 Gradient::Conic(conic) => {
                     // tiny_skia doesn't support conic gradients natively.
                     // Fall back to a solid color from the first stop.

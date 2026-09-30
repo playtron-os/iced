@@ -1,6 +1,6 @@
 use crate::Primitive;
 use crate::core::renderer::Quad;
-use crate::core::{Background, Color, Gradient, Rectangle, Size, Transformation};
+use crate::core::{Background, Color, Gradient, Point, Rectangle, Size, Transformation, Vector};
 use crate::graphics::{Image, Text};
 use crate::shadow;
 use crate::text;
@@ -141,53 +141,21 @@ impl Engine {
                     )
                     .expect("Create linear gradient")
                 }
-                Background::Gradient(Gradient::Radial(radial)) => {
-                    // Convert center from relative (0-1) to absolute coordinates
-                    let center_x = quad.bounds.x + radial.center.x * quad.bounds.width;
-                    let center_y = quad.bounds.y + radial.center.y * quad.bounds.height;
-
-                    // Use the larger radius for a circular gradient
-                    // (tiny_skia only supports circular radial gradients)
-                    let radius = radial.radius_x.max(radial.radius_y)
-                        * quad.bounds.width.max(quad.bounds.height);
-
-                    let stops: Vec<tiny_skia::GradientStop> = radial
+                Background::Gradient(Gradient::Radial(radial)) => elliptical_gradient(
+                    Point::new(
+                        quad.bounds.x + radial.center.x * quad.bounds.width,
+                        quad.bounds.y + radial.center.y * quad.bounds.height,
+                    ),
+                    Vector::new(
+                        radial.radius_x * quad.bounds.width,
+                        radial.radius_y * quad.bounds.height,
+                    ),
+                    radial
                         .stops
                         .into_iter()
                         .flatten()
-                        .map(|stop| {
-                            tiny_skia::GradientStop::new(
-                                stop.offset,
-                                tiny_skia::Color::from_rgba(
-                                    stop.color.b,
-                                    stop.color.g,
-                                    stop.color.r,
-                                    stop.color.a,
-                                )
-                                .expect("Create color"),
-                            )
-                        })
-                        .collect();
-
-                    let center = tiny_skia::Point {
-                        x: center_x,
-                        y: center_y,
-                    };
-
-                    tiny_skia::RadialGradient::new(
-                        center,
-                        center,
-                        radius,
-                        if stops.is_empty() {
-                            vec![tiny_skia::GradientStop::new(0.0, tiny_skia::Color::BLACK)]
-                        } else {
-                            stops
-                        },
-                        tiny_skia::SpreadMode::Pad,
-                        tiny_skia::Transform::identity(),
-                    )
-                    .expect("Create radial gradient")
-                }
+                        .map(|stop| (stop.offset, stop.color)),
+                ),
                 Background::Gradient(Gradient::Conic(conic)) => {
                     // tiny_skia doesn't support conic gradients natively.
                     // Fall back to a solid color from the first stop.
@@ -650,6 +618,39 @@ impl Engine {
 pub fn into_color(color: Color) -> tiny_skia::Color {
     tiny_skia::Color::from_rgba(color.b, color.g, color.r, color.a)
         .expect("Convert color from iced to tiny_skia")
+}
+
+/// A radial gradient over the ellipse with `radii` around `center`, as CSS's
+/// `radial-gradient(ellipse …)` draws it: a unit circle's gradient stretched
+/// onto the ellipse, since tiny-skia only draws circles. A flat ellipse paints
+/// its last stop.
+pub(crate) fn elliptical_gradient(
+    center: Point,
+    radii: Vector,
+    stops: impl IntoIterator<Item = (f32, Color)>,
+) -> tiny_skia::Shader<'static> {
+    let stops: Vec<(f32, Color)> = stops.into_iter().collect();
+
+    let Some(&(_, last)) = stops.last() else {
+        return tiny_skia::Shader::SolidColor(tiny_skia::Color::BLACK);
+    };
+
+    if !(radii.x > 0.0 && radii.y > 0.0) {
+        return tiny_skia::Shader::SolidColor(into_color(last));
+    }
+
+    tiny_skia::RadialGradient::new(
+        tiny_skia::Point::from_xy(0.0, 0.0),
+        tiny_skia::Point::from_xy(0.0, 0.0),
+        1.0,
+        stops
+            .iter()
+            .map(|(offset, color)| tiny_skia::GradientStop::new(*offset, into_color(*color)))
+            .collect(),
+        tiny_skia::SpreadMode::Pad,
+        tiny_skia::Transform::from_row(radii.x, 0.0, 0.0, radii.y, center.x, center.y),
+    )
+    .unwrap_or(tiny_skia::Shader::SolidColor(into_color(last)))
 }
 
 fn into_transform(transformation: Transformation) -> tiny_skia::Transform {
@@ -1502,6 +1503,45 @@ mod tests {
             draw_translated(&mut drawn.as_mut(), x, y, &shadow, &mask);
 
             assert!(drawn.data() == expected.data(), "at ({x}, {y})");
+        }
+    }
+
+    /// A radial gradient reaches the same stop at the same fraction of each
+    /// radius of its ellipse, not of a circle.
+    #[test]
+    fn a_radial_gradient_follows_its_ellipse() {
+        let shader = elliptical_gradient(
+            Point::new(100.0, 60.0),
+            Vector::new(80.0, 20.0),
+            [(0.0, Color::WHITE), (1.0, Color::BLACK)],
+        );
+        let mut pixmap = tiny_skia::Pixmap::new(200, 120).unwrap();
+        pixmap.fill_rect(
+            tiny_skia::Rect::from_xywh(0.0, 0.0, 200.0, 120.0).unwrap(),
+            &tiny_skia::Paint {
+                shader,
+                ..tiny_skia::Paint::default()
+            },
+            tiny_skia::Transform::identity(),
+            None,
+        );
+
+        for (x, y) in [
+            (139, 60),
+            (60, 60),
+            (100, 69),
+            (100, 50),
+            (130, 72),
+            (185, 60),
+        ] {
+            let t = ((x as f32 + 0.5 - 100.0) / 80.0).hypot((y as f32 + 0.5 - 60.0) / 20.0);
+            let expected = (255.0 * (1.0 - t.min(1.0))).round();
+            let shade = f32::from(pixmap.pixel(x, y).unwrap().red());
+
+            assert!(
+                (shade - expected).abs() <= 2.0,
+                "({x}, {y}): {shade}, not {expected}"
+            );
         }
     }
 

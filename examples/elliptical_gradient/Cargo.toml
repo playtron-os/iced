@@ -1,0 +1,12 @@
+[package]
+name = "elliptical_gradient"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+iced.workspace = true
+
+[dev-dependencies]
+iced_test.workspace = true
+png.workspace = true
