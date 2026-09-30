@@ -2219,6 +2219,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hairline_border"
+version = "0.1.0"
+dependencies = [
+ "iced",
+ "iced_test",
+ "png 0.18.1",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
