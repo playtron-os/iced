@@ -26,6 +26,7 @@ pub struct Simulator<'a, Message, Theme = core::Theme, Renderer = renderer::Rend
     raw: UserInterface<'a, Message, Theme, Renderer>,
     renderer: Renderer,
     size: Size,
+    scale_factor: f32,
     cursor: mouse::Cursor,
     messages: Vec<Message>,
 }
@@ -87,9 +88,17 @@ where
             raw,
             renderer,
             size,
+            scale_factor: 2.0,
             cursor: mouse::Cursor::Unavailable,
             messages: Vec::new(),
         }
+    }
+
+    /// Sets the scale factor a [`snapshot`](Self::snapshot) is drawn at; 2 by
+    /// default.
+    pub fn scale_factor(mut self, scale_factor: f32) -> Self {
+        self.scale_factor = scale_factor;
+        self
     }
 
     /// Finds the target of the given widget [`Selector`] in the [`Simulator`].
@@ -210,7 +219,7 @@ where
             self.cursor,
         );
 
-        let scale_factor = 2.0;
+        let scale_factor = self.scale_factor;
 
         let physical_size = Size::new(
             (self.size.width * scale_factor).round() as u32,
