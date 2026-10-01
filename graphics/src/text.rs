@@ -128,9 +128,10 @@ static SYSTEM_FONTS: AtomicBool = AtomicBool::new(true);
 /// besides the program's own and iced's built-in ones. See
 /// [`Settings::system_fonts`](crate::core::Settings::system_fonts).
 ///
-/// The font system is built once per process, on first use, so the choice has to come
-/// before any text is measured or drawn. Returns whether it holds: `true` when the font
-/// system was not built yet, or was built with the same choice.
+/// The font system is built once per process, on first use. Turning the host's fonts off
+/// still holds after that: their faces are dropped from it, and the program's own keep
+/// their ids, so text already laid out with them stays valid. Turning them back on once
+/// built does not hold. Returns whether the choice holds.
 pub fn set_system_fonts(enabled: bool) -> bool {
     let built_with = || {
         FONT_SYSTEM
@@ -139,6 +140,14 @@ pub fn set_system_fonts(enabled: bool) -> bool {
     };
 
     if let Some(system_fonts) = built_with() {
+        if system_fonts && !enabled {
+            font_system()
+                .write()
+                .expect("Write font system")
+                .drop_system_fonts();
+            return true;
+        }
+
         return system_fonts == enabled;
     }
 
@@ -171,18 +180,7 @@ pub fn font_system() -> &'static RwLock<FontSystem> {
                 let _ = database.load_font_source(source);
             }
 
-            // The generic families name faces a program ships or none at all, so they
-            // resolve the same on every machine. Fallback only searches this database.
-            database.set_monospace_family("Noto Sans Mono");
-            database.set_sans_serif_family(if cfg!(feature = "fira-sans") {
-                "Fira Sans"
-            } else {
-                "Open Sans"
-            });
-            database.set_serif_family("DejaVu Serif");
-
-            // A fixed locale too: it orders the fallback lists.
-            cosmic_text::FontSystem::new_with_locale_and_db(String::from("en-US"), database)
+            bundled_only(database)
         };
 
         RwLock::new(FontSystem {
@@ -223,6 +221,21 @@ pub fn font_database() -> Arc<cosmic_text::fontdb::Database> {
     database
 }
 
+/// A [`cosmic_text::FontSystem`] over `database` that resolves the same on every machine:
+/// the generic families name faces a program ships or none at all, fallback only searches
+/// this database, and the locale that orders the fallback lists is fixed.
+fn bundled_only(mut database: cosmic_text::fontdb::Database) -> cosmic_text::FontSystem {
+    database.set_monospace_family("Noto Sans Mono");
+    database.set_sans_serif_family(if cfg!(feature = "fira-sans") {
+        "Fira Sans"
+    } else {
+        "Open Sans"
+    });
+    database.set_serif_family("DejaVu Serif");
+
+    cosmic_text::FontSystem::new_with_locale_and_db(String::from("en-US"), database)
+}
+
 /// A set of system fonts.
 pub struct FontSystem {
     raw: cosmic_text::FontSystem,
@@ -254,6 +267,25 @@ impl FontSystem {
                 bytes.into_owned(),
             )));
 
+        self.version = Version(self.version.0 + 1);
+    }
+
+    /// Drops the host's faces, keeping the program's own and iced's built-in ones under the
+    /// ids they had. The caches are rebuilt over the same database.
+    fn drop_system_fonts(&mut self) {
+        let mut database = self.raw.db().clone();
+        let from_host: Vec<_> = database
+            .faces()
+            .filter(|face| !matches!(face.source, cosmic_text::fontdb::Source::Binary(_)))
+            .map(|face| face.id)
+            .collect();
+
+        for id in from_host {
+            database.remove_face(id);
+        }
+
+        self.raw = bundled_only(database);
+        self.system_fonts = false;
         self.version = Version(self.version.0 + 1);
     }
 
