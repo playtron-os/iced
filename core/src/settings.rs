@@ -40,6 +40,17 @@ pub struct Settings {
     ///
     /// By default, it is enabled.
     pub vsync: bool,
+
+    /// Whether the text system loads the fonts installed on the host, besides the
+    /// program's own [`fonts`](Self::fonts) and iced's built-in ones.
+    ///
+    /// Off, text draws only in fonts the program ships, so a headless capture draws the
+    /// same on every machine, and a glyph none of them has draws as the same missing
+    /// glyph everywhere. The text system is shared and built once per process, so the
+    /// first renderer to be created decides. `iced_test` always runs with it off.
+    ///
+    /// By default, it is enabled.
+    pub system_fonts: bool,
 }
 
 impl Default for Settings {
@@ -51,6 +62,7 @@ impl Default for Settings {
             default_text_size: Pixels(16.0),
             antialiasing: true,
             vsync: true,
+            system_fonts: true,
         }
     }
 }

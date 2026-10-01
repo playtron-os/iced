@@ -62,6 +62,8 @@ where
             _ => settings.default_font,
         };
 
+        bundled_fonts_only();
+
         for font in settings.fonts {
             load_font(font).expect("Font must be valid");
         }
@@ -406,6 +408,22 @@ pub fn typewrite(text: &str) -> impl Iterator<Item = Event> + '_ {
     text.chars()
         .map(|c| SmolStr::new_inline(&c.to_string()))
         .flat_map(|c| tap_key(keyboard::Key::Character(c.clone()), Some(c)))
+}
+
+/// Keeps the host's fonts out of the text system, whatever the [`Settings`] say, so a
+/// capture draws the same on every machine: only the fonts the program loads and iced's
+/// built-in ones, and a glyph none of them has as the same missing glyph everywhere.
+///
+/// # Panics
+///
+/// When the text system was already built with the host's fonts, which only something
+/// other than iced_test can have done in this process.
+pub(crate) fn bundled_fonts_only() {
+    assert!(
+        renderer::graphics::text::set_system_fonts(false),
+        "the text system was built with the host's fonts before iced_test ran, so captures \
+         in this process would depend on the machine"
+    );
 }
 
 fn load_font(font: impl Into<Cow<'static, [u8]>>) -> Result<(), Error> {
