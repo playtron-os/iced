@@ -414,15 +414,12 @@ pub fn typewrite(text: &str) -> impl Iterator<Item = Event> + '_ {
 /// capture draws the same on every machine: only the fonts the program loads and iced's
 /// built-in ones, and a glyph none of them has as the same missing glyph everywhere.
 ///
-/// # Panics
-///
-/// When the text system was already built with the host's fonts, which only something
-/// other than iced_test can have done in this process.
+/// Something other than iced_test may have built the text system first in this process (a
+/// test that lays out an editor's content, say); the host's faces are then dropped from it.
 pub(crate) fn bundled_fonts_only() {
     assert!(
         renderer::graphics::text::set_system_fonts(false),
-        "the text system was built with the host's fonts before iced_test ran, so captures \
-         in this process would depend on the machine"
+        "turning the host's fonts off holds whenever the text system was built"
     );
 }
 
