@@ -483,6 +483,18 @@ where
             style.foreground,
         );
     }
+
+    fn operate(
+        &mut self,
+        _tree: &mut Tree,
+        layout: Layout<'_>,
+        _renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        if let Some(label) = self.label.as_deref() {
+            operation.text(None, layout.bounds(), label);
+        }
+    }
 }
 
 impl<'a, Message, Theme, Renderer> From<Toggler<'a, Message, Theme, Renderer>>
@@ -625,5 +637,52 @@ pub fn default(theme: &Theme, status: Status) -> Style {
         text_color: None,
         border_radius: None,
         padding_ratio: 0.1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::core::Point;
+    use crate::core::widget::Id;
+
+    #[derive(Default)]
+    struct Texts(Vec<(String, Rectangle)>);
+
+    impl widget::Operation for Texts {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation)) {
+            operate(self);
+        }
+
+        fn text(&mut self, _id: Option<&Id>, bounds: Rectangle, text: &str) {
+            self.0.push((text.to_owned(), bounds));
+        }
+    }
+
+    fn texts(mut toggler: Toggler<'_, bool, Theme, ()>) -> Texts {
+        let mut tree = Tree::new(&toggler as &dyn Widget<bool, Theme, ()>);
+        let bounds = Rectangle::new(Point::new(5.0, 6.0), Size::new(200.0, 24.0));
+        let node = layout::Node::new(bounds.size()).move_to(bounds.position());
+        let mut texts = Texts::default();
+
+        toggler.operate(&mut tree, Layout::new(&node), &(), &mut texts);
+
+        texts
+    }
+
+    #[test]
+    fn reports_its_label_so_it_can_be_found_by_text() {
+        let bounds = Rectangle::new(Point::new(5.0, 6.0), Size::new(200.0, 24.0));
+
+        assert_eq!(
+            texts(Toggler::new(false).label("Wi-Fi")).0,
+            vec![("Wi-Fi".to_owned(), bounds)]
+        );
+    }
+
+    #[test]
+    fn reports_nothing_without_a_label() {
+        assert!(texts(Toggler::new(false)).0.is_empty());
     }
 }
