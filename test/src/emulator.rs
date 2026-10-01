@@ -86,6 +86,8 @@ impl<P: Program + 'static> Emulator<P> {
 
         let settings = program.settings();
 
+        crate::simulator::bundled_fonts_only();
+
         // TODO: Error handling
         let executor = P::Executor::new().expect("Create emulator executor");
 

@@ -16,6 +16,7 @@ use crate::core::{Color, Pixels, Point, Rectangle, Size, Transformation};
 
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 
 /// A text primitive.
@@ -117,30 +118,85 @@ impl Text {
 #[cfg(feature = "fira-sans")]
 pub const FIRA_SANS_REGULAR: &[u8] = include_bytes!("../fonts/FiraSans-Regular.ttf").as_slice();
 
+static FONT_SYSTEM: OnceLock<RwLock<FontSystem>> = OnceLock::new();
+
+/// Whether the global [`FontSystem`] is to load the host's fonts; read once, when it is
+/// first built.
+static SYSTEM_FONTS: AtomicBool = AtomicBool::new(true);
+
+/// Chooses whether the global [`FontSystem`] loads the fonts installed on the host,
+/// besides the program's own and iced's built-in ones. See
+/// [`Settings::system_fonts`](crate::core::Settings::system_fonts).
+///
+/// The font system is built once per process, on first use, so the choice has to come
+/// before any text is measured or drawn. Returns whether it holds: `true` when the font
+/// system was not built yet, or was built with the same choice.
+pub fn set_system_fonts(enabled: bool) -> bool {
+    let built_with = || {
+        FONT_SYSTEM
+            .get()
+            .map(|font_system| font_system.read().expect("Read font system").system_fonts)
+    };
+
+    if let Some(system_fonts) = built_with() {
+        return system_fonts == enabled;
+    }
+
+    SYSTEM_FONTS.store(enabled, Ordering::SeqCst);
+
+    // Another thread may have built it in between.
+    built_with().is_none_or(|system_fonts| system_fonts == enabled)
+}
+
 /// Returns the global [`FontSystem`].
 pub fn font_system() -> &'static RwLock<FontSystem> {
-    static FONT_SYSTEM: OnceLock<RwLock<FontSystem>> = OnceLock::new();
-
     FONT_SYSTEM.get_or_init(|| {
+        let built_in = [
+            cosmic_text::fontdb::Source::Binary(Arc::new(
+                include_bytes!("../fonts/Iced-Icons.ttf").as_slice(),
+            )),
+            #[cfg(feature = "fira-sans")]
+            cosmic_text::fontdb::Source::Binary(Arc::new(
+                include_bytes!("../fonts/FiraSans-Regular.ttf").as_slice(),
+            )),
+        ];
+        let system_fonts = SYSTEM_FONTS.load(Ordering::SeqCst);
+
+        let raw = if system_fonts {
+            cosmic_text::FontSystem::new_with_fonts(built_in)
+        } else {
+            let mut database = cosmic_text::fontdb::Database::new();
+
+            for source in built_in {
+                let _ = database.load_font_source(source);
+            }
+
+            // The generic families name faces a program ships or none at all, so they
+            // resolve the same on every machine. Fallback only searches this database.
+            database.set_monospace_family("Noto Sans Mono");
+            database.set_sans_serif_family(if cfg!(feature = "fira-sans") {
+                "Fira Sans"
+            } else {
+                "Open Sans"
+            });
+            database.set_serif_family("DejaVu Serif");
+
+            // A fixed locale too: it orders the fallback lists.
+            cosmic_text::FontSystem::new_with_locale_and_db(String::from("en-US"), database)
+        };
+
         RwLock::new(FontSystem {
-            raw: cosmic_text::FontSystem::new_with_fonts([
-                cosmic_text::fontdb::Source::Binary(Arc::new(
-                    include_bytes!("../fonts/Iced-Icons.ttf").as_slice(),
-                )),
-                #[cfg(feature = "fira-sans")]
-                cosmic_text::fontdb::Source::Binary(Arc::new(
-                    include_bytes!("../fonts/FiraSans-Regular.ttf").as_slice(),
-                )),
-            ]),
+            raw,
             loaded_fonts: HashSet::new(),
             version: Version::default(),
+            system_fonts,
         })
     })
 }
 
 /// The font database the text system holds, shared rather than built again:
 /// the fonts bundled with the program, the ones it has loaded, and the
-/// system's. The SVG rasteriser needs one, and a second database of its own
+/// system's unless [`set_system_fonts`] turned those off. The SVG rasteriser needs one, and a second database of its own
 /// would neither hold an application's own fonts nor agree with the text
 /// beside the picture about what "sans-serif" is.
 ///
@@ -172,6 +228,7 @@ pub struct FontSystem {
     raw: cosmic_text::FontSystem,
     loaded_fonts: HashSet<usize>,
     version: Version,
+    system_fonts: bool,
 }
 
 impl FontSystem {
@@ -198,6 +255,12 @@ impl FontSystem {
             )));
 
         self.version = Version(self.version.0 + 1);
+    }
+
+    /// Whether this [`FontSystem`] holds the fonts installed on the host. See
+    /// [`set_system_fonts`].
+    pub fn system_fonts(&self) -> bool {
+        self.system_fonts
     }
 
     /// Returns the current [`Version`] of the [`FontSystem`].

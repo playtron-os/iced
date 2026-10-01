@@ -128,6 +128,11 @@ where
     let settings = program.settings();
     let window_settings = program.window();
 
+    // Before anything builds the text system, which reads it once.
+    if !graphics::text::set_system_fonts(settings.system_fonts) {
+        log::warn!("the text system was built before `system_fonts` could apply");
+    }
+
     let event_loop = EventLoop::with_user_event()
         .build()
         .expect("Create event loop");
