@@ -33,6 +33,9 @@ mod error;
 mod proxy;
 mod window;
 
+#[cfg(all(feature = "automation", target_os = "linux"))]
+mod automation;
+
 #[cfg(all(
     unix,
     not(any(target_os = "macos", target_os = "ios", target_os = "android"))
@@ -150,6 +153,21 @@ where
             proxy.send_action(Action::Reload);
         });
     }
+
+    // Kept until the loop ends, when dropping it removes the door's socket.
+    #[cfg(all(feature = "automation", target_os = "linux"))]
+    let _door = {
+        let proxy = proxy.clone();
+        let app_id = window_settings
+            .as_ref()
+            .map(|window| window.platform_specific.application_id.clone())
+            .filter(|id| !id.is_empty())
+            .or_else(|| settings.id.clone());
+
+        automation::start(app_id.as_deref(), move || {
+            proxy.send_action(Action::Tick);
+        })
+    };
 
     let mut runtime = {
         let executor = P::Executor::new().map_err(Error::ExecutorCreationFailed)?;
@@ -1180,7 +1198,7 @@ async fn run_instance<P>(
                     if let Some(popup) = popup_manager.get(popup_id) {
                         let root_window = popup.root_window;
                         if let Some(root) = window_manager.get_mut(root_window) {
-                            root.raw.request_redraw();
+                            root.request_frame();
                         }
                     }
                 }
@@ -1259,7 +1277,7 @@ async fn run_instance<P>(
                     if let Some((_id, window)) =
                         window_manager.iter_mut().find(|(id, _)| *id == root_window)
                     {
-                        window.raw.request_redraw();
+                        window.request_frame();
                     }
                 }
             }
@@ -1285,7 +1303,7 @@ async fn run_instance<P>(
                     }
 
                     if let Some(root) = window_manager.get_mut(root_window) {
-                        root.raw.request_redraw();
+                        root.request_frame();
                     }
                 }
             }
@@ -1293,7 +1311,7 @@ async fn run_instance<P>(
                 match event {
                     event::Event::NewEvents(event::StartCause::Init) => {
                         for (_id, window) in window_manager.iter_mut() {
-                            window.raw.request_redraw();
+                            window.request_frame();
                         }
                     }
                     event::Event::NewEvents(event::StartCause::ResumeTimeReached { .. }) => {
@@ -1303,7 +1321,7 @@ async fn run_instance<P>(
                             if let Some(redraw_at) = window.redraw_at
                                 && redraw_at <= now
                             {
-                                window.raw.request_redraw();
+                                window.request_frame();
                                 window.redraw_at = None;
                             }
                         }
@@ -1365,6 +1383,11 @@ async fn run_instance<P>(
                             continue;
                         };
 
+                        #[cfg(all(feature = "automation", target_os = "linux"))]
+                        {
+                            window.redraw_requested_at = None;
+                        }
+
                         let physical_size = window.state.physical_size();
                         let mut logical_size = window.state.logical_size();
 
@@ -1424,7 +1447,7 @@ async fn run_instance<P>(
                                 log::error!(
                                     "Surface configure failed during resize: {msg}. Will retry next frame."
                                 );
-                                window.raw.request_redraw();
+                                window.request_frame();
                                 continue;
                             }
 
@@ -1568,7 +1591,7 @@ async fn run_instance<P>(
                                         continue;
                                     }
 
-                                    window.raw.request_redraw();
+                                    window.request_frame();
                                 }
 
                                 let Some(next_compositor) = compositor.as_mut() else {
@@ -1917,7 +1940,7 @@ async fn run_instance<P>(
                                         );
                                     }
 
-                                    window.raw.request_redraw();
+                                    window.request_frame();
                                 }
                                 _ => {
                                     present_span.finish();
@@ -1926,7 +1949,7 @@ async fn run_instance<P>(
 
                                     // Try rendering all windows again next frame.
                                     for (_id, window) in window_manager.iter_mut() {
-                                        window.raw.request_redraw();
+                                        window.request_frame();
                                     }
                                 }
                             },
@@ -1954,7 +1977,7 @@ async fn run_instance<P>(
 
                         match window_event {
                             winit::event::WindowEvent::Resized(_) => {
-                                window.raw.request_redraw();
+                                window.request_frame();
                             }
                             winit::event::WindowEvent::ThemeChanged(theme) => {
                                 let mode = conversion::theme_mode(theme);
@@ -2053,6 +2076,18 @@ async fn run_instance<P>(
                             proxy.free_slots(actions);
                             actions = 0;
                         }
+
+                        #[cfg(all(feature = "automation", target_os = "linux"))]
+                        automation::serve(
+                            &program,
+                            &mut window_manager,
+                            &mut user_interfaces,
+                            &mut popup_manager,
+                            &mut popup_cursor_position,
+                            &mut ui_caches,
+                            &mut events,
+                            &messages,
+                        );
 
                         if events.is_empty() && messages.is_empty() && window_manager.is_idle() {
                             continue;
@@ -2261,7 +2296,7 @@ async fn run_instance<P>(
                                         .iter_mut()
                                         .find(|(wid, _)| *wid == popup.root_window)
                                     {
-                                        root.raw.request_redraw();
+                                        root.request_frame();
                                     }
                                 }
                             }
@@ -2343,7 +2378,7 @@ async fn run_instance<P>(
                             }
 
                             for (_id, window) in window_manager.iter_mut() {
-                                window.raw.request_redraw();
+                                window.request_frame();
                             }
                         }
 
@@ -2922,7 +2957,7 @@ fn run_action<'a, P, C>(
             }
             window::Action::RedrawAll => {
                 for (_id, window) in window_manager.iter_mut() {
-                    window.raw.request_redraw();
+                    window.request_frame();
                 }
             }
             window::Action::RelayoutAll => {
@@ -2934,7 +2969,7 @@ fn run_action<'a, P, C>(
                         );
                     }
 
-                    window.raw.request_redraw();
+                    window.request_frame();
                 }
             }
             window::Action::EmbedToplevelByPid(
@@ -3299,7 +3334,7 @@ fn run_action<'a, P, C>(
 
             // Redraw all windows
             for (_, window) in window_manager.iter_mut() {
-                window.raw.request_redraw();
+                window.request_frame();
             }
         }
         Action::Image(action) => match action {
@@ -3342,7 +3377,7 @@ fn run_action<'a, P, C>(
                     build_user_interface(program, cache, &mut window.renderer, size, id),
                 );
 
-                window.raw.request_redraw();
+                window.request_frame();
             }
         }
         Action::Exit => {
@@ -3555,7 +3590,7 @@ fn run_action<'a, P, C>(
                                     });
 
                                     if let Some(root) = window_manager.get_mut(root_window) {
-                                        root.raw.request_redraw();
+                                        root.request_frame();
                                     }
                                 }
                             }

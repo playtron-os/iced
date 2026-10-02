@@ -26,6 +26,8 @@ off-thread-render = []
 linux-theme-detection = ["dep:mundy", "mundy/async-io", "mundy/color-scheme"]
 image = ["iced_runtime/image", "arboard/image-data"]
 x11 = ["winit/x11"]
+# Lets a test driver on the device read and press widgets, once an admin switches it on
+automation = ["dep:iced_automation"]
 wayland = ["winit/wayland", "winit/wayland-dlopen", "winit/wayland-csd-adwaita", "arboard/wayland-data-control"]
 
 [dependencies]
@@ -41,6 +43,10 @@ winit.workspace = true
 
 sysinfo.workspace = true
 sysinfo.optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.iced_automation]
+workspace = true
+optional = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 arboard.workspace = true

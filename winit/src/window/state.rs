@@ -111,6 +111,17 @@ where
             .unwrap_or(mouse::Cursor::Unavailable)
     }
 
+    /// Puts the cursor at `position`, in logical pixels, as if the pointer had moved there.
+    #[cfg(all(feature = "automation", target_os = "linux"))]
+    pub fn place_cursor(&mut self, position: crate::core::Point) {
+        let scale_factor = f64::from(self.viewport.scale_factor());
+
+        self.cursor_position = Some(winit::dpi::PhysicalPosition::new(
+            f64::from(position.x) * scale_factor,
+            f64::from(position.y) * scale_factor,
+        ));
+    }
+
     pub fn modifiers(&self) -> winit::keyboard::ModifiersState {
         self.modifiers
     }
