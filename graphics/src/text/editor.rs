@@ -91,12 +91,11 @@ impl Editor {
 /// `None` when some line has no cached layout: the content height would then be
 /// a guess, and clamping against a guess can hide text that is really there.
 fn max_scroll(buffer: &cosmic_text::Buffer) -> Option<f32> {
-    let line_height = buffer.metrics().line_height;
-
     let mut content = 0.0;
 
     for line in &buffer.lines {
-        content += line.layout_opt()?.len() as f32 * line_height;
+        let _ = line.layout_opt()?;
+        content += line_layout_height(buffer, line);
     }
 
     Some((content - buffer.size().1.unwrap_or(0.0)).max(0.0))
@@ -167,18 +166,17 @@ impl editor::Editor for Editor {
 
         let cursor = match internal.editor.selection_bounds() {
             Some((start, end)) => {
-                let line_height = buffer.metrics().line_height;
                 let selected_lines = end.line - start.line + 1;
-
-                let visual_lines_offset = visual_lines_offset(start.line, buffer);
 
                 let regions = buffer
                     .lines
                     .iter()
+                    .enumerate()
                     .skip(start.line)
                     .take(selected_lines)
-                    .enumerate()
-                    .flat_map(|(i, line)| {
+                    .flat_map(|(line_index, line)| {
+                        let i = line_index - start.line;
+
                         highlight_line(
                             line,
                             if i == 0 { start.index } else { 0 },
@@ -188,18 +186,19 @@ impl editor::Editor for Editor {
                                 line.text().len()
                             },
                         )
+                        .enumerate()
+                        .map(move |(visual_line, region)| (line_index, visual_line, region))
                     })
-                    .enumerate()
-                    .filter_map(|(visual_line, (x, width))| {
+                    .filter_map(|(line_index, visual_line, (x, width))| {
                         if width > 0.0 {
+                            let (y, height) = visual_line_bounds(buffer, line_index, visual_line);
+
                             Some(
                                 Rectangle {
                                     x,
                                     width,
-                                    y: (visual_line as i32 + visual_lines_offset) as f32
-                                        * line_height
-                                        - buffer.scroll().vertical,
-                                    height: line_height,
+                                    y,
+                                    height,
                                 } * (1.0 / internal.hint_factor),
                             )
                         } else {
@@ -211,10 +210,6 @@ impl editor::Editor for Editor {
                 Selection::Range(regions)
             }
             _ => {
-                let line_height = buffer.metrics().line_height;
-
-                let visual_lines_offset = visual_lines_offset(cursor.line, buffer);
-
                 let line = buffer
                     .lines
                     .get(cursor.line)
@@ -264,11 +259,11 @@ impl editor::Editor for Editor {
                         layout.last().map(|line| line.w).unwrap_or(0.0),
                     ));
 
+                let (y, _) = visual_line_bounds(buffer, cursor.line, visual_line);
+
                 Selection::Caret(Point::new(
                     offset / internal.hint_factor,
-                    ((visual_lines_offset + visual_line as i32) as f32 * line_height
-                        - buffer.scroll().vertical)
-                        / internal.hint_factor,
+                    y / internal.hint_factor,
                 ))
             }
         };
@@ -482,13 +477,19 @@ impl editor::Editor for Editor {
                     let line_height = buffer.metrics().line_height;
                     let buffer_height = buffer.size().1.unwrap_or(0.0);
 
-                    // Calculate total content height
-                    let total_lines: usize = buffer
+                    // Calculate total content height; a line not laid out yet
+                    // counts one line of the buffer's height.
+                    let total_content_height: f32 = buffer
                         .lines
                         .iter()
-                        .map(|line| line.layout_opt().map(Vec::len).unwrap_or(1))
+                        .map(|line| {
+                            if line.layout_opt().is_some() {
+                                line_layout_height(buffer, line)
+                            } else {
+                                line_height
+                            }
+                        })
                         .sum();
-                    let total_content_height = total_lines as f32 * line_height;
 
                     // Calculate maximum scroll offset
                     let max_scroll = (total_content_height - buffer_height).max(0.0);
@@ -751,20 +752,24 @@ impl editor::Editor for Editor {
 
         let letter_spacing = internal.letter_spacing;
         let attributes = to_attributes(font, letter_spacing);
+        let hint_factor = internal.hint_factor;
 
         for line in &mut buffer_mut_from_editor(&mut internal.editor).lines
             [current_line..=last_visible_line]
         {
             let mut list = cosmic_text::AttrsList::new(&attributes);
+            let spans: Vec<_> = highlighter.highlight_line(line.text()).collect();
 
-            for (range, highlight) in highlighter.highlight_line(line.text()) {
+            for (range, highlight) in spans {
                 let format = format_highlight(&highlight);
+                let metrics = highlighter.metrics(&highlight);
 
                 if format.color.is_some()
                     || format.font.is_some()
                     || format.underline
                     || format.strikethrough
                     || format.background.is_some()
+                    || metrics.is_some()
                 {
                     let mut attrs = if let Some(font) = format.font {
                         to_attributes(font, letter_spacing)
@@ -779,6 +784,12 @@ impl editor::Editor for Editor {
                         attrs.strikethrough_opt = Some(cosmic_text::Decoration::new());
                     }
                     attrs.background_opt = format.background.map(text::to_color);
+                    if let Some(metrics) = metrics {
+                        attrs = attrs.metrics(cosmic_text::Metrics::new(
+                            metrics.size * hint_factor,
+                            metrics.line_height * hint_factor,
+                        ));
+                    }
                     list.add_span(range, &attrs);
                 }
             }
@@ -787,6 +798,14 @@ impl editor::Editor for Editor {
         }
 
         internal.editor.shape_as_needed(font_system.raw(), false);
+
+        // The lines were laid out again, maybe at new sizes: a cached caret or
+        // selection is measured off the old layout.
+        let _ = internal
+            .selection
+            .write()
+            .expect("Write to cursor cache")
+            .take();
 
         self.0 = Some(Arc::new(internal));
     }
@@ -916,19 +935,64 @@ fn highlight_line(
     })
 }
 
-fn visual_lines_offset(line: usize, buffer: &cosmic_text::Buffer) -> i32 {
+/// The height of a visual line: the buffer's, or taller where a highlight's
+/// [`highlighter::Metrics`] made it so.
+fn layout_line_height(buffer: &cosmic_text::Buffer, layout_line: &cosmic_text::LayoutLine) -> f32 {
+    layout_line
+        .line_height_opt
+        .unwrap_or(buffer.metrics().line_height)
+}
+
+/// The height of every visual line of a buffer line together; none when it
+/// has not been laid out.
+fn line_layout_height(buffer: &cosmic_text::Buffer, line: &cosmic_text::BufferLine) -> f32 {
+    line.layout_opt()
+        .map(|layout| {
+            layout
+                .iter()
+                .map(|layout_line| layout_line_height(buffer, layout_line))
+                .sum()
+        })
+        .unwrap_or_default()
+}
+
+/// The top and the height of a buffer line's `visual_line`, measured from the
+/// top of the viewport, in buffer pixels.
+fn visual_line_bounds(buffer: &cosmic_text::Buffer, line: usize, visual_line: usize) -> (f32, f32) {
     let scroll = buffer.scroll();
 
-    let start = scroll.line.min(line);
-    let end = scroll.line.max(line);
+    let mut top = -scroll.vertical;
 
-    let visual_lines_offset: usize = buffer.lines[start..]
+    if scroll.line <= line {
+        top += buffer.lines[scroll.line..line]
+            .iter()
+            .map(|line| line_layout_height(buffer, line))
+            .sum::<f32>();
+    } else {
+        top -= buffer.lines[line..scroll.line]
+            .iter()
+            .map(|line| line_layout_height(buffer, line))
+            .sum::<f32>();
+    }
+
+    let layout = buffer.lines[line]
+        .layout_opt()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+
+    top += layout
         .iter()
-        .take(end - start)
-        .map(|line| line.layout_opt().map(Vec::len).unwrap_or_default())
-        .sum();
+        .take(visual_line)
+        .map(|layout_line| layout_line_height(buffer, layout_line))
+        .sum::<f32>();
 
-    visual_lines_offset as i32 * if scroll.line < line { 1 } else { -1 }
+    let height = layout
+        .get(visual_line)
+        .map_or(buffer.metrics().line_height, |layout_line| {
+            layout_line_height(buffer, layout_line)
+        });
+
+    (top, height)
 }
 
 fn to_motion(motion: Motion) -> cosmic_text::Motion {
@@ -1064,5 +1128,89 @@ mod tests {
         // Laid out again at the same size: the offset is legitimate and stays.
         update(&mut editor, viewport, &mut highlighter);
         assert!((scroll(&editor) - scrolled).abs() < 0.5);
+    }
+
+    /// Lays the first line out at 40px on a 70px line: a heading.
+    struct Heading {
+        line: usize,
+    }
+
+    impl highlighter::Highlighter for Heading {
+        type Settings = ();
+        type Highlight = bool;
+        type Iterator<'a> = std::vec::IntoIter<(std::ops::Range<usize>, bool)>;
+
+        fn new(_settings: &Self::Settings) -> Self {
+            Self { line: 0 }
+        }
+
+        fn update(&mut self, _new_settings: &Self::Settings) {}
+
+        fn change_line(&mut self, line: usize) {
+            self.line = line;
+        }
+
+        fn highlight_line(&mut self, line: &str) -> Self::Iterator<'_> {
+            let heading = self.line == 0;
+            self.line += 1;
+            vec![(0..line.len(), heading)].into_iter()
+        }
+
+        fn current_line(&self) -> usize {
+            self.line
+        }
+
+        fn metrics(&self, heading: &bool) -> Option<highlighter::Metrics> {
+            heading.then_some(highlighter::Metrics {
+                size: 40.0,
+                line_height: 70.0,
+            })
+        }
+    }
+
+    #[test]
+    fn a_taller_highlighted_line_moves_the_caret_and_selection_below_it() {
+        let mut highlighter = Heading::new(&());
+        let mut editor = Editor::with_text("Title\nbody");
+        let size = Size::new(WIDE, 1000.0);
+
+        editor.perform(Action::Move(Motion::DocumentEnd));
+        editor.update(
+            size,
+            Font::DEFAULT,
+            Pixels(14.0),
+            LineHeight::Absolute(Pixels(LINE_HEIGHT)),
+            Wrapping::WordOrGlyph,
+            None,
+            &mut highlighter,
+        );
+        // Asked before the heading is highlighted, as a widget may: the answer
+        // must not outlive the layout it was measured on.
+        let _ = editor.selection();
+        editor.highlight(Font::DEFAULT, &mut highlighter, |_| {
+            highlighter::Format::default()
+        });
+
+        match editor.selection() {
+            Selection::Caret(at) => {
+                assert!(
+                    (at.y - 70.0).abs() < 0.5,
+                    "the caret is under the heading: {at:?}"
+                );
+            }
+            Selection::Range(_) => panic!("nothing is selected"),
+        }
+
+        editor.perform(Action::SelectAll);
+        match editor.selection() {
+            Selection::Range(regions) => {
+                assert_eq!(regions.len(), 2);
+                assert!((regions[0].height - 70.0).abs() < 0.5, "{regions:?}");
+                assert!((regions[1].y - 70.0).abs() < 0.5, "{regions:?}");
+                assert!((regions[1].height - LINE_HEIGHT).abs() < 0.5, "{regions:?}");
+            }
+            Selection::Caret(_) => panic!("everything is selected"),
+        }
+        assert!((editor.min_bounds().height - (70.0 + LINE_HEIGHT)).abs() < 0.5);
     }
 }
