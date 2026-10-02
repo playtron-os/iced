@@ -799,6 +799,14 @@ impl editor::Editor for Editor {
 
         internal.editor.shape_as_needed(font_system.raw(), false);
 
+        // The lines were laid out again, maybe at new sizes: a cached caret or
+        // selection is measured off the old layout.
+        let _ = internal
+            .selection
+            .write()
+            .expect("Write to cursor cache")
+            .take();
+
         self.0 = Some(Arc::new(internal));
     }
 }
@@ -1165,33 +1173,24 @@ mod tests {
         let mut highlighter = Heading::new(&());
         let mut editor = Editor::with_text("Title\nbody");
         let size = Size::new(WIDE, 1000.0);
-        let lay_out = |editor: &mut Editor, highlighter: &mut Heading| {
-            editor.update(
-                size,
-                Font::DEFAULT,
-                Pixels(14.0),
-                LineHeight::Absolute(Pixels(LINE_HEIGHT)),
-                Wrapping::WordOrGlyph,
-                None,
-                highlighter,
-            );
-            editor.highlight(Font::DEFAULT, highlighter, |_| {
-                highlighter::Format::default()
-            });
-            editor.update(
-                size,
-                Font::DEFAULT,
-                Pixels(14.0),
-                LineHeight::Absolute(Pixels(LINE_HEIGHT)),
-                Wrapping::WordOrGlyph,
-                None,
-                highlighter,
-            );
-        };
-        lay_out(&mut editor, &mut highlighter);
 
         editor.perform(Action::Move(Motion::DocumentEnd));
-        lay_out(&mut editor, &mut highlighter);
+        editor.update(
+            size,
+            Font::DEFAULT,
+            Pixels(14.0),
+            LineHeight::Absolute(Pixels(LINE_HEIGHT)),
+            Wrapping::WordOrGlyph,
+            None,
+            &mut highlighter,
+        );
+        // Asked before the heading is highlighted, as a widget may: the answer
+        // must not outlive the layout it was measured on.
+        let _ = editor.selection();
+        editor.highlight(Font::DEFAULT, &mut highlighter, |_| {
+            highlighter::Format::default()
+        });
+
         match editor.selection() {
             Selection::Caret(at) => {
                 assert!(
