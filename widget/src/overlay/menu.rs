@@ -7,6 +7,7 @@ use crate::core::overlay;
 use crate::core::renderer;
 use crate::core::text::{self, Text};
 use crate::core::touch;
+use crate::core::widget::Operation;
 use crate::core::widget::tree::{self, Tree};
 use crate::core::window;
 use crate::core::{
@@ -358,6 +359,13 @@ where
         })
     }
 
+    fn operate(&mut self, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn Operation) {
+        let list_layout = layout.children().next().unwrap();
+
+        self.list
+            .operate(self.tree, list_layout, renderer, operation);
+    }
+
     fn update(
         &mut self,
         event: &Event,
@@ -552,6 +560,30 @@ where
         };
 
         layout::Node::new(size)
+    }
+
+    /// Reports each option as text, over the whole row a press selects it in.
+    fn operate(
+        &mut self,
+        _tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        let bounds = layout.bounds();
+        let text_size = self.text_size.unwrap_or_else(|| renderer.default_size());
+        let option_height = f32::from(self.line_height.to_absolute(text_size)) + self.padding.y();
+
+        for (i, option) in self.options.iter().enumerate() {
+            let row = Rectangle {
+                x: bounds.x,
+                y: bounds.y + option_height * i as f32,
+                width: bounds.width,
+                height: option_height,
+            };
+
+            operation.text(None, row, &(self.to_string)(option));
+        }
     }
 
     fn update(
