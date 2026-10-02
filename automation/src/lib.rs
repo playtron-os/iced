@@ -1318,7 +1318,7 @@ impl Operation for Collector {
     fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
         self.stack.push((self.viewport, self.translation));
         if let Some(shift) = self.shift.take() {
-            self.translation = self.translation + shift;
+            self.translation += shift;
         }
         operate(self);
         let _ = self.stack.pop();
