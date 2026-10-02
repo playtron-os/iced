@@ -40,6 +40,24 @@ pub trait Highlighter: 'static {
     /// If `change_line` has been called, this will normally be the least index
     /// that changed.
     fn current_line(&self) -> usize;
+
+    /// The size a highlight lays its text out at, when it is not the editor's.
+    ///
+    /// A highlight with [`Metrics`] makes its line as tall as it needs, which is
+    /// how a heading is larger than the text around it. `None`, the default,
+    /// keeps the editor's size and line height.
+    fn metrics(&self, _highlight: &Self::Highlight) -> Option<Metrics> {
+        None
+    }
+}
+
+/// The font size and line height of highlighted text, in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Metrics {
+    /// The font size.
+    pub size: f32,
+    /// The height of a line.
+    pub line_height: f32,
 }
 
 /// A highlighter that highlights nothing.
