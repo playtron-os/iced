@@ -22,6 +22,7 @@ mod pin;
 mod responsive;
 mod shortcut;
 mod stack;
+mod test_id;
 mod themer;
 
 pub mod button;
@@ -116,6 +117,8 @@ pub use slider::Slider;
 pub use space::Space;
 #[doc(no_inline)]
 pub use stack::{SizingMode, Stack};
+#[doc(no_inline)]
+pub use test_id::{TestId, test_id};
 #[doc(no_inline)]
 pub use text::Text;
 #[doc(no_inline)]

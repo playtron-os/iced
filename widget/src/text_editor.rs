@@ -1108,6 +1108,16 @@ where
         let state = tree.state.downcast_mut::<State<Highlighter>>();
 
         operation.focusable(self.id.as_ref(), layout.bounds(), state);
+
+        // What it holds — or, empty, the placeholder it shows — so a test can
+        // find the editor and read back what was typed into it.
+        if self.content.is_empty() {
+            if let Some(placeholder) = &self.placeholder {
+                operation.text(self.id.as_ref(), layout.bounds(), placeholder);
+            }
+        } else {
+            operation.text(self.id.as_ref(), layout.bounds(), &self.content.text());
+        }
     }
 }
 

@@ -151,6 +151,18 @@ impl<P: Program> Daemon<P> {
         Self { settings, ..self }
     }
 
+    /// Sets the [`Settings::automation`] of the [`Daemon`]: how its
+    /// automation door behaves, when the `automation` feature builds one in.
+    pub fn automation(self, automation: crate::automation::Config) -> Self {
+        Self {
+            settings: Settings {
+                automation,
+                ..self.settings
+            },
+            ..self
+        }
+    }
+
     /// Sets the [`Settings::antialiasing`] of the [`Daemon`].
     pub fn antialiasing(self, antialiasing: bool) -> Self {
         Self {

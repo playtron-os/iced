@@ -13,11 +13,30 @@ use crate::{Rectangle, Vector};
 
 use std::any::Any;
 use std::fmt;
+
+/// Reported through [`Operation::custom`] by a widget right before it walks
+/// into children it paints away from where they were laid out (sliding them
+/// in, say): how far they are moved. A reader of the screen places them where
+/// they are drawn; everything else ignores it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PaintedOffset(pub Vector);
+
+/// Reported through [`Operation::custom`] by a widget right before it walks
+/// into children it keeps but doesn't show: a page covered by another, a
+/// dismissed reveal. Operations that act on widgets (focus, scoped
+/// operations) still reach them; a reader of the screen counts them as not
+/// visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Hidden;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// A piece of logic that can traverse the widget tree of an application in
 /// order to query or update some widget state.
+///
+/// A method added here is silently dropped by any operation that wraps
+/// another and forwards only some methods, since every method has a default.
+/// Check such wrappers when adding one.
 pub trait Operation<T = ()>: Send {
     /// Requests further traversal of the widget tree to keep operating.
     ///

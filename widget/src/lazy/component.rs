@@ -575,6 +575,18 @@ where
             .unwrap_or_default()
     }
 
+    /// Lets operations reach the overlay, as they do outside a component.
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        let _ = self.with_overlay_mut_maybe(|overlay| {
+            overlay.operate(layout, renderer, operation);
+        });
+    }
+
     fn update(
         &mut self,
         event: &core::Event,

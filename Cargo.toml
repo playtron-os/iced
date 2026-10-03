@@ -91,6 +91,8 @@ off-thread-render = ["iced_winit/off-thread-render"]
 sipper = ["iced_runtime/sipper"]
 # Enables Linux system theme detection
 linux-theme-detection = ["iced_winit/linux-theme-detection"]
+# Lets a test driver on the device read and press widgets, once an admin switches it on (Linux)
+automation = ["iced_winit/automation"]
 # Enables the Unix X11 backend
 x11 = ["iced_renderer/x11", "iced_winit/x11"]
 # Enables the Unix Wayland backend
@@ -140,6 +142,7 @@ strip = "debuginfo"
 
 [workspace]
 members = [
+    "automation",
     "beacon",
     "core",
     "debug",
@@ -173,6 +176,7 @@ rust-version = "1.92"
 
 [workspace.dependencies]
 iced = { version = "0.15.0-dev", path = "." }
+iced_automation = { version = "0.15.0-dev", path = "automation" }
 iced_beacon = { version = "0.15.0-dev", path = "beacon" }
 iced_core = { version = "0.15.0-dev", path = "core" }
 iced_debug = { version = "0.15.0-dev", path = "debug" }
@@ -224,6 +228,7 @@ rfd = "0.16"
 rustc-hash = "2.0"
 semver = "1.0"
 serde = "1.0"
+serde_json = "1.0"
 sha2 = "0.10"
 sipper = "0.1"
 smol = "2"

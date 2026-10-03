@@ -447,6 +447,38 @@ where
         }
     }
 
+    /// Reports what the pick list shows (its selection, or else its
+    /// placeholder) as text, so it can be found by it to open, like a button.
+    /// Not while it is open: its options are reported then, and the selected one
+    /// must be found by its text in the menu, not here.
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        _renderer: &Renderer,
+        operation: &mut dyn crate::core::widget::Operation,
+    ) {
+        // Open with a menu to show (see `overlay`): the options are reported there.
+        if self.on_select.is_some()
+            && tree
+                .state
+                .downcast_ref::<State<Renderer::Paragraph>>()
+                .is_open
+        {
+            return;
+        }
+
+        let shown = self
+            .selected
+            .as_ref()
+            .map(|selected| (self.to_string)(selected.borrow()))
+            .or_else(|| self.placeholder.clone());
+
+        if let Some(shown) = shown {
+            operation.text(None, layout.bounds(), &shown);
+        }
+    }
+
     fn layout(
         &mut self,
         tree: &mut Tree,

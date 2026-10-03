@@ -497,6 +497,23 @@ where
         .translate(Vector::new(tooltip_bounds.x, tooltip_bounds.y))
     }
 
+    /// Lets operations read what the tooltip shows while it is open: its text
+    /// and named containers only. Nothing in it joins focus or scrolling, since
+    /// it disappears as soon as the pointer leaves.
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.tooltip.as_widget_mut().operate(
+            self.tree,
+            layout.children().next().unwrap(),
+            renderer,
+            &mut ReadOnly(operation),
+        );
+    }
+
     fn draw(
         &self,
         renderer: &mut Renderer,
@@ -522,5 +539,24 @@ where
             cursor_position,
             &Rectangle::with_size(Size::INFINITE),
         );
+    }
+}
+
+/// Passes on only what a reader of the screen needs: text, named containers,
+/// and the walk into children.
+struct ReadOnly<'a>(&'a mut dyn widget::Operation);
+
+impl widget::Operation for ReadOnly<'_> {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        self.0
+            .traverse(&mut |operation| operate(&mut ReadOnly(operation)));
+    }
+
+    fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+        self.0.container(id, bounds);
+    }
+
+    fn text(&mut self, id: Option<&widget::Id>, bounds: Rectangle, text: &str) {
+        self.0.text(id, bounds, text);
     }
 }

@@ -75,6 +75,8 @@ where
                 renderer,
                 mouse_interaction: mouse::Interaction::None,
                 redraw_at: None,
+                #[cfg(all(feature = "automation", target_os = "linux"))]
+                redraw_requested_at: None,
                 preedit: None,
                 ime_state: None,
             },
@@ -164,6 +166,9 @@ where
     pub surface_version: u64,
     pub renderer: P::Renderer,
     pub redraw_at: Option<Instant>,
+    /// When a frame was last asked for and not yet drawn, for the automation door.
+    #[cfg(all(feature = "automation", target_os = "linux"))]
+    pub redraw_requested_at: Option<Instant>,
     preedit: Option<Preedit<P::Renderer>>,
     ime_state: Option<(Rectangle, input_method::Purpose)>,
 }
@@ -189,10 +194,23 @@ where
         self.state.logical_size()
     }
 
+    /// Asks winit for a frame. With the automation door compiled in, also notes
+    /// when, so the door's `idle` knows a frame is still coming.
+    pub fn request_frame(&mut self) {
+        self.raw.request_redraw();
+
+        #[cfg(all(feature = "automation", target_os = "linux"))]
+        {
+            // The oldest frame still undrawn: asking again doesn't restart it
+            // (see `iced_automation::frame_due`).
+            let _ = self.redraw_requested_at.get_or_insert_with(Instant::now);
+        }
+    }
+
     pub fn request_redraw(&mut self, redraw_request: RedrawRequest) {
         match redraw_request {
             RedrawRequest::NextFrame => {
-                self.raw.request_redraw();
+                self.request_frame();
                 self.redraw_at = None;
             }
             RedrawRequest::At(at) => {

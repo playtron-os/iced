@@ -1,0 +1,21 @@
+[package]
+name = "iced_automation"
+description = "A door that lets a test driver on the same device read and press an app's widgets, once an admin switches it on"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+categories.workspace = true
+keywords.workspace = true
+rust-version.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+iced_core.workspace = true
+log.workspace = true
+serde_json.workspace = true
+rustix = { version = "0.38", features = ["process", "net", "event"] }
+
+[lints]
+workspace = true

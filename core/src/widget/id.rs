@@ -21,6 +21,16 @@ impl Id {
 
         Self(Internal::Unique(id))
     }
+
+    /// Returns the name of the [`Id`], if it was created from a string.
+    ///
+    /// Unique ids have no name and return `None`.
+    pub fn as_str(&self) -> Option<&str> {
+        match &self.0 {
+            Internal::Custom(name) => Some(name),
+            Internal::Unique(_) => None,
+        }
+    }
 }
 
 impl From<&'static str> for Id {
@@ -51,5 +61,18 @@ mod tests {
         let b = Id::unique();
 
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn as_str_returns_the_name_of_custom_ids_only() {
+        assert_eq!(
+            Id::new("slate.new_document").as_str(),
+            Some("slate.new_document")
+        );
+        assert_eq!(
+            Id::from(String::from("files.trash")).as_str(),
+            Some("files.trash")
+        );
+        assert_eq!(Id::unique().as_str(), None);
     }
 }
