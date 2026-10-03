@@ -593,11 +593,7 @@ fn parse_policy(contents: &str) -> Result<Policy, String> {
                     return Err("\"ops\" must be a list".into());
                 };
 
-                policy.ops = Ops {
-                    read: false,
-                    pointer: false,
-                    keyboard: false,
-                };
+                policy.ops = Ops::NONE;
 
                 for name in names {
                     match name.as_str() {
@@ -848,6 +844,9 @@ fn accept(listener: &UnixListener, shared: &Arc<Shared>) {
 
     for stream in listener.incoming() {
         if !is_open() {
+            if let Ok(stream) = stream {
+                refuse(stream, "the app has stopped");
+            }
             return;
         }
 
@@ -1976,9 +1975,9 @@ fn node_json(node: &Node) -> Value {
 ///
 /// A widget that paints its children moved from their layout can say so: it
 /// reports a [`PaintedOffset`] through `custom`, right before walking into
-/// them, and they are then placed where it paints them. (icetron's
-/// `AnimatedTranslate` does this.) A widget that keeps children it doesn't
-/// show reports [`Hidden`] the same way, and none of them counts as visible.
+/// them, and they are then placed where it paints them. A widget that keeps
+/// children it doesn't show reports [`Hidden`] the same way, and none of them
+/// counts as visible.
 #[derive(Debug)]
 pub struct Collector {
     window: window::Id,
@@ -3087,14 +3086,9 @@ mod tests {
         assert_eq!(policy.max.drag_steps, Some(4));
         assert_eq!(policy.max.clients, Some(2));
         assert_eq!(policy.max.request, None);
-        assert_eq!(
-            policy.ops,
-            Ops {
-                read: true,
-                pointer: true,
-                keyboard: false
-            }
-        );
+        let mut ops = Ops::ALL;
+        ops.keyboard = false;
+        assert_eq!(policy.ops, ops);
         assert!(policy.allows("org.example.app"));
         assert!(!policy.allows("org.example.other"));
 

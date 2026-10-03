@@ -35,9 +35,8 @@ use std::sync::Arc;
 /// order to query or update some widget state.
 ///
 /// A method added here is silently dropped by any operation that wraps
-/// another and forwards only some methods (icetron-p's `utils::operation`
-/// adapters, say), since every method has a default. Check those wrappers
-/// when adding one.
+/// another and forwards only some methods, since every method has a default.
+/// Check such wrappers when adding one.
 pub trait Operation<T = ()>: Send {
     /// Requests further traversal of the widget tree to keep operating.
     ///

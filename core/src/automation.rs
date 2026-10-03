@@ -109,6 +109,7 @@ impl Config {
 
 /// Kinds of request the door takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Ops {
     /// `info`, `tree` and `idle`: reading what the app shows.
     pub read: bool,
@@ -127,6 +128,13 @@ impl Ops {
         read: true,
         pointer: true,
         keyboard: true,
+    };
+
+    /// No kind of request.
+    pub const NONE: Self = Self {
+        read: false,
+        pointer: false,
+        keyboard: false,
     };
 
     /// Reading only: no input goes in.
