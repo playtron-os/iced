@@ -1,6 +1,10 @@
 //! Dropdown menus and tooltips are overlays. Widget operations must reach what
 //! they show, so a selector (or a test driver reading the tree) can find it.
 //! A closed pick list reports what it shows, so it can be found to open.
+//!
+//! Skipped with the `wgpu` feature: it builds the renderer without a backend,
+//! so the simulator can't make one.
+#![cfg(not(feature = "wgpu"))]
 use iced_test::{Error, Simulator, simulator};
 use iced_widget::core::widget::operation::Focusable;
 use iced_widget::core::widget::{Id, Operation};

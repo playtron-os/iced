@@ -122,6 +122,12 @@ where
         ));
     }
 
+    /// Forgets the cursor, as if the pointer had left the window.
+    #[cfg(all(feature = "automation", target_os = "linux"))]
+    pub fn clear_cursor(&mut self) {
+        self.cursor_position = None;
+    }
+
     pub fn modifiers(&self) -> winit::keyboard::ModifiersState {
         self.modifiers
     }
@@ -142,7 +148,15 @@ where
         self.style.text_color
     }
 
-    pub fn update(&mut self, program: &program::Instance<P>, window: &Window, event: &WindowEvent) {
+    /// Updates the state from a window event. Returns whether the window
+    /// must draw again (its theme changed), for the caller to ask for a frame.
+    #[must_use]
+    pub fn update(
+        &mut self,
+        program: &program::Instance<P>,
+        window: &Window,
+        event: &WindowEvent,
+    ) -> bool {
         match event {
             WindowEvent::Resized(new_size) => {
                 let size = Size::new(new_size.width, new_size.height);
@@ -183,11 +197,13 @@ where
 
                 if self.theme.is_none() {
                     self.style = program.style(&self.default_theme);
-                    window.request_redraw();
+                    return true;
                 }
             }
             _ => {}
         }
+
+        false
     }
 
     pub fn synchronize(

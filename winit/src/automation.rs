@@ -3,7 +3,7 @@
 //! The door, its switch and its protocol live there; this module only answers
 //! the door's requests from the windows, popups and pending events of this loop.
 use crate::core::window;
-use crate::core::{Event, Point, Size, theme};
+use crate::core::{Event, Point, Size, mouse, theme};
 use crate::graphics::{Compositor, Viewport};
 use crate::popup::PopupManager;
 use crate::program::{self, Program};
@@ -15,7 +15,7 @@ use rustc_hash::FxHashMap;
 
 use std::time::Instant;
 
-pub use iced_automation::start;
+pub use iced_automation::start_with;
 
 /// Answers the door's requests. Called by the loop before it hands out its
 /// pending events, so anything injected here is processed in the same pass,
@@ -54,12 +54,14 @@ pub fn serve<P, C>(
         Ask::Info => {
             let mut surfaces: Vec<Surface> = window_manager
                 .iter_mut()
-                .map(|(id, window)| Surface {
-                    window: id,
-                    popup: false,
-                    size: window.state.logical_size(),
-                    scale_factor: window.state.scale_factor(),
-                    focused: window.raw.has_focus(),
+                .map(|(id, window)| {
+                    Surface::new(
+                        id,
+                        false,
+                        window.state.logical_size(),
+                        window.state.scale_factor(),
+                        window.raw.has_focus(),
+                    )
                 })
                 .collect();
 
@@ -67,16 +69,18 @@ pub fn serve<P, C>(
                 popup_manager
                     .iter()
                     .filter(|(_, popup)| popup.configured)
-                    .map(|(_, popup)| Surface {
-                        window: popup.iced_id,
-                        popup: true,
-                        size: popup
-                            .viewport
-                            .as_ref()
-                            .map(Viewport::logical_size)
-                            .unwrap_or(Size::ZERO),
-                        scale_factor: popup.scale_factor,
-                        focused: false,
+                    .map(|(_, popup)| {
+                        Surface::new(
+                            popup.iced_id,
+                            true,
+                            popup
+                                .viewport
+                                .as_ref()
+                                .map(Viewport::logical_size)
+                                .unwrap_or(Size::ZERO),
+                            popup.scale_factor,
+                            false,
+                        )
                     }),
             );
 
@@ -140,7 +144,26 @@ pub fn serve<P, C>(
             window,
             cursor,
             events: injected,
+            leave,
+            ..
         } => {
+            // The door's pointer leaves the surface it was on: forget the
+            // cursor placed there, and tell it, as a person's pointer would.
+            if let Some(left) = leave {
+                let known = if let Some(toplevel) = window_manager.get_mut(left) {
+                    toplevel.state.clear_cursor();
+                    true
+                } else {
+                    popup_cursor_position.remove(&left).is_some()
+                        || popup_manager.find_by_iced_id(left).is_some()
+                };
+
+                if known {
+                    events.push((left, Event::Mouse(mouse::Event::CursorLeft)));
+                    idle = false;
+                }
+            }
+
             let found = if let Some(toplevel) = window_manager.get_mut(window) {
                 if let Some(cursor) = cursor {
                     toplevel.state.place_cursor(cursor);
@@ -164,5 +187,6 @@ pub fn serve<P, C>(
 
             Answer::Injected(found)
         }
+        _ => Answer::Unsupported,
     });
 }

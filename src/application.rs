@@ -214,6 +214,18 @@ impl<P: Program> Application<P> {
         Self { settings, ..self }
     }
 
+    /// Sets the [`Settings::automation`] of the [`Application`]: how its
+    /// automation door behaves, when the `automation` feature builds one in.
+    pub fn automation(self, automation: crate::automation::Config) -> Self {
+        Self {
+            settings: Settings {
+                automation,
+                ..self.settings
+            },
+            ..self
+        }
+    }
+
     /// Sets the [`Settings::antialiasing`] of the [`Application`].
     pub fn antialiasing(self, antialiasing: bool) -> Self {
         Self {

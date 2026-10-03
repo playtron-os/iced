@@ -164,7 +164,7 @@ where
             .filter(|id| !id.is_empty())
             .or_else(|| settings.id.clone());
 
-        automation::start(app_id.as_deref(), move || {
+        automation::start_with(settings.automation.clone(), app_id.as_deref(), move || {
             proxy.send_action(Action::Tick);
         })
     };
@@ -2020,7 +2020,9 @@ async fn run_instance<P>(
                                 &mut popup_manager,
                             );
                         } else {
-                            window.state.update(&program, &window.raw, &window_event);
+                            if window.state.update(&program, &window.raw, &window_event) {
+                                window.request_frame();
+                            }
 
                             // If a mouse button is pressed on a window that has active popups,
                             // dismiss those popups (click-outside-to-close behavior).
@@ -3294,11 +3296,13 @@ fn run_action<'a, P, C>(
                 };
 
                 for (_id, window) in window_manager.iter_mut() {
-                    window.state.update(
+                    if window.state.update(
                         program,
                         &window.raw,
                         &winit::event::WindowEvent::ThemeChanged(theme),
-                    );
+                    ) {
+                        window.request_frame();
+                    }
                 }
             }
         },

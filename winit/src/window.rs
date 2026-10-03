@@ -201,7 +201,9 @@ where
 
         #[cfg(all(feature = "automation", target_os = "linux"))]
         {
-            self.redraw_requested_at = Some(Instant::now());
+            // The oldest frame still undrawn: asking again doesn't restart it
+            // (see `iced_automation::frame_due`).
+            let _ = self.redraw_requested_at.get_or_insert_with(Instant::now);
         }
     }
 

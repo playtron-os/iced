@@ -2,10 +2,32 @@
 //! of a running app, the way a person would.
 //!
 //! The door stays shut unless an administrator has switched it on for the whole
-//! device, by creating [`SWITCH`] owned by root and writable by no one else.
-//! Nothing the user's own processes can set (an environment variable, a
-//! setting, a file in their home) opens it: on Wayland one app may not press
-//! buttons in another, and the door must not become a way around that.
+//! device, by creating the switch file ([`DEFAULT_SWITCH`], or the app's
+//! [`Config::switch`]) owned by root and writable by no one else. Nothing the
+//! user's own processes can set (an environment variable, a setting, a file in
+//! their home) opens it or moves it: on Wayland one app may not press buttons
+//! in another, and the door must not become a way around that. The switch is
+//! read again for every connection, so removing it shuts the door for every
+//! new client without restarting the app.
+//!
+//! An empty switch file opens the door with its defaults. Otherwise the file
+//! is JSON, and lets the administrator narrow what the door does; a file the
+//! door can't read as that keeps it shut:
+//!
+//! ```json
+//! {
+//!   "max": { "answer_ms": 5000, "settle_ms": 500, "request_ms": 30000,
+//!            "steps": 8, "clients": 8, "idle_client_ms": 120000 },
+//!   "ops": ["read", "pointer", "keyboard"],
+//!   "apps": ["org.example.app"]
+//! }
+//! ```
+//!
+//! Every key is optional. `max` caps the app's settings ([`Config`]) and what
+//! a request may ask for; `ops` lists the kinds of request taken (`read` is
+//! `info`, `tree` and `idle`; `pointer` is `click`, `hover`, `scroll`, `drag`
+//! and `leave`; `keyboard` is `type` and `key`); `apps` lists the app ids that
+//! open a door at all.
 //!
 //! When the switch is on, the app listens on a Unix socket only its own user
 //! can reach, at `$XDG_RUNTIME_DIR/iced-automation/<app id>-<pid>.sock`, and
@@ -22,33 +44,61 @@
 //! | `{"op":"drag", …, "to":{…}}` | presses on the match, moves to `to` (a target, or `dx`/`dy`), releases |
 //! | `{"op":"type","text":"…"}` | types the text |
 //! | `{"op":"key","key":"Enter","modifiers":["ctrl"]}` | presses a key |
+//! | `{"op":"leave"}` | moves the door's pointer off the surface it is on |
 //!
 //! Clicks and keys go in as input events, into the same queue a person's input
 //! reaches the widgets through, never by calling the app's handlers. They skip
 //! the windowing layer itself, so, for instance, a click outside a Wayland popup
-//! doesn't dismiss it. Positions are surface-relative logical pixels. Pointer requests also take `"x"` and
-//! `"y"`, and any request can name a `"window"` from `info`.
+//! doesn't dismiss it. Positions are surface-relative logical pixels. Pointer
+//! requests also take `"x"` and `"y"`, and any request can name a `"window"`
+//! from `info`.
+//!
+//! Any request may also give `"timeout_ms"` (how long it may take in all),
+//! `"settle_ms"` (how long to wait for the app to settle after each step; `0`
+//! doesn't wait) and, for a drag, `"steps"`. The app's [`Config`] gives the
+//! values a request leaves out; whatever a request gives is clamped to the
+//! administrator's `max` and the door's own bounds.
+//!
+//! # What the door can do
+//!
+//! The door reads what an app shows and puts input into it, as its own user.
+//! That is more than "read and press": keys typed into a terminal app run as
+//! shell commands, so for a confined process that can reach the socket, the
+//! door of such an app is a shell. An app like that can leave the keyboard out
+//! with [`Config::ops`], and an administrator can for every app. The tree also
+//! carries what text inputs and editors hold (a password input's dots, so its
+//! length; a text editor's whole content).
+//!
+//! Only the same user can reach the socket (a folder of their own, mode 0700,
+//! in their private runtime folder), and the door bounds what one client can
+//! cost the app: one request line of at most 64 KiB, a ceiling on clients, a
+//! poll no faster than every 16 ms, and clients that send nothing for a while
+//! are let go.
 //!
 //! # For event loops
 //!
 //! This crate owns the switch, the socket and the protocol; it knows nothing
-//! about any one event loop. A loop opens the door once with [`start`], keeping
-//! the [`Open`] it returns for as long as it runs, and calls [`serve`] once per
-//! pass, before it hands out its pending events. [`serve`] gives it each
-//! request as an [`Ask`]; it answers with an [`Answer`], reading its widget
-//! trees with a [`Collector`].
+//! about any one event loop. A loop opens the door once with [`start_with`]
+//! (passing the app's [`Config`]) or [`start`], keeping the [`Open`] it returns
+//! for as long as it runs, and calls [`serve`] once per pass, before it hands
+//! out its pending events. [`serve`] gives it each request as an [`Ask`]; it
+//! answers with an [`Answer`], reading its widget trees with a [`Collector`].
+//! [`Ask`], [`Answer`] and [`Surface`] may grow: match with a wildcard and
+//! answer what you don't know with [`Answer::Unsupported`].
 #![cfg(target_os = "linux")]
 
 use iced_core as core;
 
 use crate::core::keyboard::{self, key};
 use crate::core::mouse;
-use crate::core::widget::operation::{Focusable, Scrollable, TextInput};
+use crate::core::widget::operation::{Focusable, Hidden, PaintedOffset, Scrollable, TextInput};
 use crate::core::widget::{Id, Operation};
 use crate::core::window;
 use crate::core::{Event, Point, Rectangle, Size, SmolStr, Vector};
 
 use serde_json::{Value, json};
+
+pub use crate::core::automation::{Config, Ops};
 
 use std::cell::Cell;
 use std::fs;
@@ -56,48 +106,181 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// The file an administrator creates to open the door on a device.
-pub const SWITCH: &str = "/etc/kora/automation-enabled";
-
-/// How long a request waits for the app to answer.
-const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// How long input waits for the app to settle between steps.
-const SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
+/// The switch file that opens the door, unless the app's [`Config`] names
+/// another: `/etc/iced/automation-enabled`, or the path in the
+/// `ICED_AUTOMATION_SWITCH` environment variable when iced was built. A
+/// distribution that keeps its switch elsewhere can also link this path to
+/// it: the door follows links root put there, and a link to nothing keeps it
+/// shut.
+pub const DEFAULT_SWITCH: &str = match option_env!("ICED_AUTOMATION_SWITCH") {
+    Some(path) => path,
+    None => "/etc/iced/automation-enabled",
+};
 
 /// The longest request line read, in bytes.
 const MAX_REQUEST: u64 = 64 * 1024;
 
-/// How many clients may be connected at once.
-const MAX_CLIENTS: usize = 8;
+/// The longest switch file read, in bytes.
+const MAX_SWITCH: u64 = 64 * 1024;
 
 /// How long before a client gives up the event loop stops taking its request,
 /// so that a request the client was told timed out never runs later.
 const ANSWER_MARGIN: Duration = Duration::from_millis(250);
 
-/// How long one request may take in all, across its steps (a long `type`, say).
-/// After that, or once the client has hung up, the rest is not sent.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often the door asks a busy app whether it has settled, at most.
+const POLL: Duration = Duration::from_millis(16);
 
-/// How many pointer moves a drag is split into.
-const DRAG_STEPS: u16 = 8;
+/// The door's numbers: its defaults, the bounds nothing can set it outside of,
+/// and the limits in force for a client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Limits {
+    /// How long a step of a request waits for the app to answer.
+    answer: Duration,
+    /// How long input waits for the app to settle after each step.
+    settle: Duration,
+    /// How long one request may take in all, across its steps (a long
+    /// `type`, say). After that, or once the client has hung up, the rest is
+    /// not sent.
+    request: Duration,
+    /// How many pointer moves a drag is split into.
+    drag_steps: u16,
+    /// How many clients may be connected at once.
+    clients: usize,
+    /// How long a connected client may send nothing before it is let go.
+    idle_client: Duration,
+}
 
-/// Requests waiting for the event loop, set once the door opens.
-static INBOX: OnceLock<Mutex<mpsc::Receiver<Job>>> = OnceLock::new();
+const DEFAULTS: Limits = Limits {
+    answer: Duration::from_secs(5),
+    settle: Duration::from_millis(500),
+    request: Duration::from_secs(30),
+    drag_steps: 8,
+    clients: 8,
+    idle_client: Duration::from_secs(120),
+};
 
-/// The surface the door last pressed a button on, with the one the app said had
-/// keyboard focus at that moment. Keys go to the pressed surface, as they would
-/// after a person's click, until the app's focus moves somewhere else.
-static LAST_PRESS: Mutex<Option<(window::Id, Option<window::Id>)>> = Mutex::new(None);
+/// Nothing sets the door below these...
+const HARD_MIN: Limits = Limits {
+    answer: Duration::from_millis(500),
+    settle: Duration::ZERO,
+    request: Duration::from_secs(1),
+    drag_steps: 1,
+    clients: 1,
+    idle_client: Duration::from_secs(1),
+};
+
+/// ...or above these, whatever the app or the switch file says.
+const HARD_MAX: Limits = Limits {
+    answer: Duration::from_secs(60),
+    settle: Duration::from_secs(10),
+    request: Duration::from_secs(600),
+    drag_steps: 200,
+    clients: 32,
+    idle_client: Duration::from_secs(3600),
+};
+
+/// What an administrator's switch file says (see the crate docs).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Policy {
+    /// The highest values allowed; `None` leaves the door's own bound.
+    max: Max,
+    ops: Ops,
+    /// The apps that open a door; `None` is every app.
+    apps: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Max {
+    answer: Option<Duration>,
+    settle: Option<Duration>,
+    request: Option<Duration>,
+    drag_steps: Option<u16>,
+    clients: Option<usize>,
+    idle_client: Option<Duration>,
+}
+
+impl Policy {
+    fn allows(&self, app_id: &str) -> bool {
+        self.apps
+            .as_ref()
+            .is_none_or(|apps| apps.iter().any(|app| app == app_id))
+    }
+}
+
+/// Clamps `wanted` (else `default`) to `[min, min(admin, max)]`. An
+/// administrator's limit below the hard minimum still wins.
+fn clamp<T: Ord + Copy>(wanted: Option<T>, default: T, min: T, admin: Option<T>, max: T) -> T {
+    let ceiling = admin.map_or(max, |admin| admin.min(max));
+    let floor = min.min(ceiling);
+
+    wanted.unwrap_or(default).clamp(floor, ceiling)
+}
+
+impl Limits {
+    /// The limits for an app with `config`, under `max`.
+    fn resolve(config: &Config, max: &Max) -> Self {
+        Self {
+            answer: clamp(
+                config.answer_timeout,
+                DEFAULTS.answer,
+                HARD_MIN.answer,
+                max.answer,
+                HARD_MAX.answer,
+            ),
+            settle: clamp(
+                config.settle_timeout,
+                DEFAULTS.settle,
+                HARD_MIN.settle,
+                max.settle,
+                HARD_MAX.settle,
+            ),
+            request: clamp(
+                config.request_timeout,
+                DEFAULTS.request,
+                HARD_MIN.request,
+                max.request,
+                HARD_MAX.request,
+            ),
+            drag_steps: clamp(
+                config.drag_steps,
+                DEFAULTS.drag_steps,
+                HARD_MIN.drag_steps,
+                max.drag_steps,
+                HARD_MAX.drag_steps,
+            ),
+            clients: clamp(
+                config.max_clients,
+                DEFAULTS.clients,
+                HARD_MIN.clients,
+                max.clients,
+                HARD_MAX.clients,
+            ),
+            idle_client: clamp(
+                config.idle_client_timeout,
+                DEFAULTS.idle_client,
+                HARD_MIN.idle_client,
+                max.idle_client,
+                HARD_MAX.idle_client,
+            ),
+        }
+    }
+}
+
+/// Requests waiting for the event loop, while the door is open.
+static INBOX: Mutex<Option<mpsc::Receiver<Job>>> = Mutex::new(None);
+
+/// Whether the door is open in this process.
+static OPEN: AtomicBool = AtomicBool::new(false);
 
 type Wake = Arc<dyn Fn() + Send + Sync>;
 
-/// An open door. Dropping it removes the socket; keep it while the loop runs.
+/// An open door. Dropping it shuts the door: it removes the socket, and every
+/// connected client is told the app has stopped. Keep it while the loop runs.
 #[derive(Debug)]
 #[must_use = "dropping the door removes its socket at once"]
 pub struct Open {
@@ -113,19 +296,39 @@ impl Open {
 
 impl Drop for Open {
     fn drop(&mut self) {
+        OPEN.store(false, Ordering::SeqCst);
+
+        // Dropping the inbox makes every waiting client's request fail at once
+        // ("the app has stopped"), instead of each waiting out its timeout.
+        if let Ok(mut inbox) = INBOX.lock() {
+            *inbox = None;
+        }
+
         let _ = fs::remove_file(&self.path);
     }
 }
 
-/// Opens the door if the device's switch is on. Otherwise does nothing at all,
-/// and returns `None`.
-///
-/// The socket is named after `app_id` (the Wayland app id, when the app sets
-/// one), or else the name the program was started as. `wake` must make the
-/// event loop run a pass soon, so that it calls [`serve`]; it is called from
-/// the door's own threads.
+/// Opens the door with the door's defaults, if the device's switch is on.
+/// See [`start_with`].
 #[must_use = "dropping the door removes its socket at once"]
 pub fn start(app_id: Option<&str>, wake: impl Fn() + Send + Sync + 'static) -> Option<Open> {
+    start_with(Config::default(), app_id, wake)
+}
+
+/// Opens the door if the device's switch is on and lets this app in.
+/// Otherwise does nothing at all, and returns `None`.
+///
+/// `config` is the app's say in how the door behaves ([`Config`]); the
+/// administrator's switch file can narrow it further. The socket is named
+/// after `app_id` (the Wayland app id, when the app sets one), or else the name
+/// the program was started as. `wake` must make the event loop run a pass
+/// soon, so that it calls [`serve`]; it is called from the door's own threads.
+#[must_use = "dropping the door removes its socket at once"]
+pub fn start_with(
+    config: Config,
+    app_id: Option<&str>,
+    wake: impl Fn() + Send + Sync + 'static,
+) -> Option<Open> {
     let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
     let program = std::env::args_os()
         .next()
@@ -136,8 +339,9 @@ pub fn start(app_id: Option<&str>, wake: impl Fn() + Send + Sync + 'static) -> O
         })
         .filter(|name| !name.is_empty());
 
-    start_with(
-        Path::new(SWITCH),
+    open_door(
+        config,
+        &[0],
         runtime_dir,
         app_id.or(program.as_deref()),
         Arc::new(wake),
@@ -146,7 +350,7 @@ pub fn start(app_id: Option<&str>, wake: impl Fn() + Send + Sync + 'static) -> O
 
 /// Whether the door is open in this process. Cheap: one atomic load.
 pub fn is_open() -> bool {
-    INBOX.get().is_some()
+    OPEN.load(Ordering::Relaxed)
 }
 
 /// Answers the requests waiting for the event loop, by calling `answer` for
@@ -157,15 +361,17 @@ pub fn is_open() -> bool {
 /// Requests the client has already given up on are dropped unasked, except
 /// ones that let go of a key or button an earlier request pressed.
 pub fn serve(mut answer: impl FnMut(Ask) -> Answer) {
-    let Some(inbox) = INBOX.get() else {
+    if !is_open() {
+        return;
+    }
+
+    let Ok(inbox) = INBOX.lock() else {
         return;
     };
 
-    let Ok(inbox) = inbox.lock() else {
-        return;
-    };
-
-    answer_all(&inbox, &mut answer);
+    if let Some(inbox) = inbox.as_ref() {
+        answer_all(inbox, &mut answer);
+    }
 }
 
 fn answer_all(inbox: &mpsc::Receiver<Job>, answer: &mut impl FnMut(Ask) -> Answer) {
@@ -182,6 +388,11 @@ fn answer_all(inbox: &mpsc::Receiver<Job>, answer: &mut impl FnMut(Ask) -> Answe
 /// asked for (`requested_at`) and not yet drawn, or a timed redraw
 /// (`redraw_at`, an animation step, say) is less than a frame away.
 ///
+/// `requested_at` is when the oldest frame still undrawn was asked for: a
+/// loop sets it on the first request after a draw and keeps it until the next
+/// draw, so frames asked for again and again (messages arriving several times
+/// a second for a minimised window) don't keep the app busy forever.
+///
 /// A frame asked for long ago and never drawn means the compositor isn't
 /// drawing the surface (it is hidden), and a timed redraw further off (a text
 /// cursor blinking) is not work in progress, so neither keeps the app busy.
@@ -193,60 +404,235 @@ pub fn frame_due(requested_at: Option<Instant>, redraw_at: Option<Instant>, now:
         || redraw_at.is_some_and(|at| at <= now + FRAME)
 }
 
-fn start_with(
-    switch: &Path,
+/// Everything a connection needs to know about the door it came in through.
+struct Shared {
+    config: Config,
+    switch: PathBuf,
+    /// The owners a switch may have: root, except in tests.
+    trusted: Vec<u32>,
+    app_id: String,
+    wake: Wake,
+    jobs: mpsc::Sender<Job>,
+    /// The surface the door's pointer is on, for every client.
+    pointed: Arc<Mutex<Option<window::Id>>>,
+}
+
+fn open_door(
+    config: Config,
+    trusted: &[u32],
     runtime_dir: Option<PathBuf>,
     app_id: Option<&str>,
     wake: Wake,
 ) -> Option<Open> {
-    if !switch_is_on(switch) {
+    let switch = config
+        .switch
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SWITCH));
+    let app_id = app_id.unwrap_or("app").to_owned();
+
+    let policy = match read_policy(&switch, trusted) {
+        Ok(policy) => policy,
+        Err(Shut::Off) => return None,
+        Err(Shut::Refused(why)) => {
+            log::warn!("automation: door stays shut: {why}");
+            return None;
+        }
+    };
+
+    if !policy.allows(&app_id) {
+        log::info!(
+            "automation: door stays shut: {} doesn't list {app_id}",
+            switch.display()
+        );
         return None;
     }
 
     // Before anything touches the socket folder: a second door would bind,
     // and then remove, the first one's socket.
-    if INBOX.get().is_some() {
+    if is_open() {
         log::warn!("automation: the door is already open in this process");
         return None;
     }
 
     let Some(runtime_dir) = runtime_dir else {
-        log::warn!("automation: {SWITCH} is on, but XDG_RUNTIME_DIR is unset; door stays shut");
+        log::warn!(
+            "automation: {} is on, but XDG_RUNTIME_DIR is unset; door stays shut",
+            switch.display()
+        );
         return None;
     };
 
-    let (listener, path) = match listen(&runtime_dir, app_id) {
+    let (listener, path) = match listen(&runtime_dir, Some(&app_id)) {
         Ok(opened) => opened,
         Err(error) => {
-            log::warn!("automation: {SWITCH} is on, but the door could not open: {error}");
+            log::warn!(
+                "automation: {} is on, but the door could not open: {error}",
+                switch.display()
+            );
             return None;
         }
     };
 
-    let open = Open { path };
     let (jobs, inbox) = mpsc::channel();
 
-    if INBOX.set(Mutex::new(inbox)).is_err() {
-        log::warn!("automation: the door is already open in this process");
-        return None;
+    {
+        let Ok(mut slot) = INBOX.lock() else {
+            let _ = fs::remove_file(&path);
+            return None;
+        };
+
+        if slot.is_some() || OPEN.swap(true, Ordering::SeqCst) {
+            log::warn!("automation: the door is already open in this process");
+            let _ = fs::remove_file(&path);
+            return None;
+        }
+
+        *slot = Some(inbox);
     }
 
-    let app_id = app_id.unwrap_or("app").to_owned();
+    let open = Open { path };
+
+    log::warn!(
+        "automation: door open at {} because {} is on",
+        open.path.display(),
+        switch.display()
+    );
+
+    let shared = Arc::new(Shared {
+        config,
+        switch,
+        trusted: trusted.to_vec(),
+        app_id,
+        wake,
+        jobs,
+        pointed: Arc::new(Mutex::new(None)),
+    });
 
     let _ = thread::Builder::new()
         .name("iced-automation".into())
-        .spawn(move || accept(listener, jobs, wake, app_id))
+        .spawn(move || accept(&listener, &shared))
         .ok()?;
-
-    log::warn!(
-        "automation: door open at {} because {SWITCH} is on",
-        open.path.display()
-    );
 
     Some(open)
 }
 
-/// Whether `switch` is a file that only root could have put there.
+/// Why the switch doesn't open the door.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Shut {
+    /// There is no switch, or not one root put there.
+    Off,
+    /// There is one, but it can't be read as a switch file.
+    Refused(String),
+}
+
+/// What the switch at `switch` allows, if it is on.
+fn read_policy(switch: &Path, trusted: &[u32]) -> Result<Policy, Shut> {
+    if !switch_is_on(switch, trusted) {
+        return Err(Shut::Off);
+    }
+
+    let mut contents = String::new();
+
+    let _ = fs::File::open(switch)
+        .and_then(|file| file.take(MAX_SWITCH + 1).read_to_string(&mut contents))
+        .map_err(|error| Shut::Refused(format!("{}: {error}", switch.display())))?;
+
+    if contents.len() as u64 > MAX_SWITCH {
+        return Err(Shut::Refused(format!("{} is too long", switch.display())));
+    }
+
+    parse_policy(&contents).map_err(|error| Shut::Refused(format!("{}: {error}", switch.display())))
+}
+
+/// Reads a switch file's contents: empty is the defaults; anything else must
+/// be the JSON the crate docs describe, with no key the door doesn't know.
+fn parse_policy(contents: &str) -> Result<Policy, String> {
+    if contents.trim().is_empty() {
+        return Ok(Policy::default());
+    }
+
+    let value: Value =
+        serde_json::from_str(contents).map_err(|error| format!("not JSON: {error}"))?;
+    let Value::Object(fields) = value else {
+        return Err("must be a JSON object".into());
+    };
+
+    let mut policy = Policy::default();
+
+    for (key, value) in &fields {
+        match key.as_str() {
+            "max" => {
+                let Value::Object(max) = value else {
+                    return Err("\"max\" must be an object".into());
+                };
+
+                for (key, value) in max {
+                    let number = value
+                        .as_u64()
+                        .ok_or_else(|| format!("\"max.{key}\" must be a whole number"))?;
+                    let millis = Some(Duration::from_millis(number));
+
+                    match key.as_str() {
+                        "answer_ms" => policy.max.answer = millis,
+                        "settle_ms" => policy.max.settle = millis,
+                        "request_ms" => policy.max.request = millis,
+                        "idle_client_ms" => policy.max.idle_client = millis,
+                        "steps" => {
+                            policy.max.drag_steps = Some(u16::try_from(number).unwrap_or(u16::MAX));
+                        }
+                        "clients" => {
+                            policy.max.clients =
+                                Some(usize::try_from(number).unwrap_or(usize::MAX));
+                        }
+                        _ => return Err(format!("unknown key \"max.{key}\"")),
+                    }
+                }
+            }
+            "ops" => {
+                let Value::Array(names) = value else {
+                    return Err("\"ops\" must be a list".into());
+                };
+
+                policy.ops = Ops {
+                    read: false,
+                    pointer: false,
+                    keyboard: false,
+                };
+
+                for name in names {
+                    match name.as_str() {
+                        Some("read") => policy.ops.read = true,
+                        Some("pointer") => policy.ops.pointer = true,
+                        Some("keyboard") => policy.ops.keyboard = true,
+                        _ => return Err(format!("unknown op kind {name}")),
+                    }
+                }
+            }
+            "apps" => {
+                let Value::Array(names) = value else {
+                    return Err("\"apps\" must be a list".into());
+                };
+
+                policy.apps = Some(
+                    names
+                        .iter()
+                        .map(|name| {
+                            name.as_str()
+                                .map(str::to_owned)
+                                .ok_or_else(|| "\"apps\" must list app ids".to_owned())
+                        })
+                        .collect::<Result<_, _>>()?,
+                );
+            }
+            _ => return Err(format!("unknown key \"{key}\"")),
+        }
+    }
+
+    Ok(policy)
+}
+
+/// Whether `switch` is a file that only root could have put there. (`trusted`
+/// is the owners that count as root: just root, except in tests.)
 ///
 /// The path is walked one step at a time, following symlinks by hand. Every
 /// folder, symlink and the file itself must belong to root, the file must not
@@ -254,7 +640,7 @@ fn start_with(
 /// anyone else unless it is sticky (as `/nix/store` is), where others cannot
 /// replace what root put there. So a NixOS `environment.etc` link into the
 /// store counts, and a link to a file a user could recreate does not.
-fn switch_is_on(switch: &Path) -> bool {
+fn switch_is_on(switch: &Path, trusted: &[u32]) -> bool {
     use std::collections::VecDeque;
     use std::ffi::OsString;
     use std::path::Component;
@@ -269,7 +655,7 @@ fn switch_is_on(switch: &Path) -> bool {
 
     let root_folder = |metadata: &fs::Metadata| {
         metadata.is_dir()
-            && metadata.uid() == 0
+            && trusted.contains(&metadata.uid())
             && (metadata.mode() & 0o022 == 0 || metadata.mode() & 0o1000 != 0)
     };
 
@@ -292,7 +678,7 @@ fn switch_is_on(switch: &Path) -> bool {
             return false;
         };
 
-        if metadata.uid() != 0 {
+        if !trusted.contains(&metadata.uid()) {
             return false;
         }
 
@@ -338,10 +724,21 @@ fn listen(runtime_dir: &Path, app_id: Option<&str>) -> io::Result<(UnixListener,
     // Both folders must belong to the user the app runs as. Otherwise someone
     // else could swap them for links while the door sets itself up (say, root
     // running an app with a user's environment).
-    if fs::symlink_metadata(runtime_dir)?.uid() != user {
+    let runtime = fs::symlink_metadata(runtime_dir)?;
+
+    if runtime.uid() != user {
         return Err(io::Error::other(format!(
             "{} does not belong to the user the app runs as",
             runtime_dir.display()
+        )));
+    }
+
+    // As the XDG spec requires: private to the user.
+    if runtime.mode() & 0o077 != 0 {
+        return Err(io::Error::other(format!(
+            "{} is open to other users (mode {:o}); it must be 0700",
+            runtime_dir.display(),
+            runtime.mode() & 0o777
         )));
     }
 
@@ -377,7 +774,9 @@ fn listen(runtime_dir: &Path, app_id: Option<&str>) -> io::Result<(UnixListener,
         })
         .collect();
 
-    let path = dir.join(format!("{name}-{}.sock", std::process::id()));
+    let suffix = format!("-{}.sock", std::process::id());
+    let name = fit_name(&name, &dir, &suffix)?;
+    let path = dir.join(format!("{name}{suffix}"));
 
     match fs::remove_file(&path) {
         Ok(()) => {}
@@ -389,6 +788,36 @@ fn listen(runtime_dir: &Path, app_id: Option<&str>) -> io::Result<(UnixListener,
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
 
     Ok((listener, path))
+}
+
+/// A socket path must fit in `sun_path` (108 bytes, with its NUL). A name too
+/// long for what `dir` and `suffix` leave keeps its start, so it can still be
+/// found by its app id, and ends in a hash of the whole of it.
+fn fit_name(name: &str, dir: &Path, suffix: &str) -> io::Result<String> {
+    const SUN_PATH: usize = 107;
+    const HASH: usize = 9; // "~" and 8 hex digits
+
+    let room = SUN_PATH
+        .checked_sub(dir.as_os_str().len() + 1 + suffix.len())
+        .filter(|room| *room > HASH)
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "{} is too long a path for a socket in it",
+                dir.display()
+            ))
+        })?;
+
+    if name.len() <= room {
+        return Ok(name.to_owned());
+    }
+
+    // FNV-1a: stable and short; this only tells long names apart.
+    let hash = name.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+    });
+
+    // `name` is ASCII by now, so any byte is a character boundary.
+    Ok(format!("{}~{hash:08x}", &name[..room - HASH]))
 }
 
 /// Removes the sockets of apps that are no longer running.
@@ -414,27 +843,68 @@ fn sweep(dir: &Path) {
     }
 }
 
-fn accept(listener: UnixListener, jobs: mpsc::Sender<Job>, wake: Wake, app_id: String) {
+fn accept(listener: &UnixListener, shared: &Arc<Shared>) {
     let clients = Arc::new(AtomicUsize::new(0));
 
     for stream in listener.incoming() {
-        let Ok(mut stream) = stream else {
+        if !is_open() {
+            return;
+        }
+
+        let Ok(stream) = stream else {
             continue;
         };
 
-        if clients.fetch_add(1, Ordering::SeqCst) >= MAX_CLIENTS {
+        // The switch is read again for every client: removing it, or
+        // narrowing what it allows, takes effect without restarting the app.
+        let policy = match read_policy(&shared.switch, &shared.trusted) {
+            Ok(policy) if policy.allows(&shared.app_id) => policy,
+            Ok(_) => {
+                refuse(
+                    stream,
+                    &format!(
+                        "the door is shut: {} doesn't list this app",
+                        shared.switch.display()
+                    ),
+                );
+                continue;
+            }
+            Err(Shut::Off) => {
+                refuse(
+                    stream,
+                    &format!("the door is shut: {} is off", shared.switch.display()),
+                );
+                continue;
+            }
+            Err(Shut::Refused(why)) => {
+                refuse(stream, &format!("the door is shut: {why}"));
+                continue;
+            }
+        };
+
+        let limits = Limits::resolve(&shared.config, &policy.max);
+
+        if clients.fetch_add(1, Ordering::SeqCst) >= limits.clients {
             let _ = clients.fetch_sub(1, Ordering::SeqCst);
-            let _ = writeln!(stream, "{}", json!({ "error": "too many clients" }));
+            refuse(stream, "too many clients");
             continue;
         }
 
-        let door = Door {
-            jobs: jobs.clone(),
-            wake: wake.clone(),
-            app_id: app_id.clone(),
-            peer: stream.try_clone().ok(),
-            deadline: Cell::new(None),
-        };
+        // A client that sends nothing for a while gives its place up, and so
+        // does one that stops reading its answers.
+        let _ = stream.set_read_timeout(Some(limits.idle_client));
+        let _ = stream.set_write_timeout(Some(limits.idle_client));
+
+        let door = Door::new(
+            shared.jobs.clone(),
+            shared.wake.clone(),
+            shared.app_id.clone(),
+            stream.try_clone().ok(),
+            limits,
+            policy.max,
+            shared.config.ops.unwrap_or_default().and(policy.ops),
+            shared.pointed.clone(),
+        );
         let leaving = clients.clone();
 
         let spawned = thread::Builder::new()
@@ -450,6 +920,16 @@ fn accept(listener: UnixListener, jobs: mpsc::Sender<Job>, wake: Wake, app_id: S
     }
 }
 
+/// Turns a client away with `why`. Its first request is read (briefly) before
+/// the socket closes, so a client that writes before it reads gets the reason
+/// rather than a broken pipe.
+fn refuse(mut stream: UnixStream, why: &str) {
+    let _ = writeln!(stream, "{}", json!({ "error": why }));
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+    let _ = (&stream).take(MAX_REQUEST).read_to_end(&mut Vec::new());
+}
+
 /// A request handed to the event loop, with where to send the answer.
 struct Job {
     ask: Ask,
@@ -461,8 +941,10 @@ struct Job {
     cleanup: bool,
 }
 
-/// What the door asks the event loop.
+/// What the door asks the event loop. More may be added: match with a
+/// wildcard, and answer what you don't know with [`Answer::Unsupported`].
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Ask {
     /// Describe every surface: answer [`Answer::Info`].
     Info,
@@ -477,6 +959,11 @@ pub enum Ask {
     /// Put `events` into the pending events of surface `window`, after placing
     /// its cursor at `cursor`, if given: answer [`Answer::Injected`], `false`
     /// if there is no such surface.
+    ///
+    /// First, if `leave` names a surface, the door's pointer leaves it: forget
+    /// the cursor placed there and give it a `CursorLeft`, so hover styles and
+    /// tooltips go, as when a person's pointer moves off.
+    #[non_exhaustive]
     Inject {
         /// The window or popup the events are for.
         window: window::Id,
@@ -484,11 +971,14 @@ pub enum Ask {
         cursor: Option<Point>,
         /// The events, in order.
         events: Vec<Event>,
+        /// The surface the door's pointer leaves first, if any.
+        leave: Option<window::Id>,
     },
 }
 
 /// The event loop's answer to an [`Ask`].
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Answer {
     /// Every window and popup.
     Info(Vec<Surface>),
@@ -500,10 +990,15 @@ pub enum Answer {
     Focused(Option<window::Id>),
     /// Whether the surface was found and the events queued.
     Injected(bool),
+    /// The loop doesn't know this [`Ask`] (it was added after the loop was
+    /// written).
+    Unsupported,
 }
 
-/// A window or popup, as [`Answer::Info`] lists it.
+/// A window or popup, as [`Answer::Info`] lists it. Made with
+/// [`Surface::new`]; it may gain fields.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Surface {
     /// Its id.
     pub window: window::Id,
@@ -515,6 +1010,25 @@ pub struct Surface {
     pub scale_factor: f32,
     /// Whether it has keyboard focus.
     pub focused: bool,
+}
+
+impl Surface {
+    /// A surface, as [`Answer::Info`] lists it.
+    pub fn new(
+        window: window::Id,
+        popup: bool,
+        size: Size,
+        scale_factor: f32,
+        focused: bool,
+    ) -> Self {
+        Self {
+            window,
+            popup,
+            size,
+            scale_factor,
+            focused,
+        }
+    }
 }
 
 /// Something a [`Collector`] found in a widget tree.
@@ -537,11 +1051,57 @@ struct Door {
     app_id: String,
     /// The client's socket, to notice when it hangs up mid-request.
     peer: Option<UnixStream>,
+    /// The limits in force for this client.
+    limits: Limits,
+    /// The administrator's caps, which a request's own numbers can't exceed.
+    max: Max,
+    /// The kinds of request this client may make.
+    ops: Ops,
     /// When the request being handled must be done by.
     deadline: Cell<Option<Instant>>,
+    /// How long the request being handled waits for the app to settle.
+    settle: Cell<Duration>,
+    /// How many moves the drag being handled is split into.
+    steps: Cell<u16>,
+    /// The surface this client last pressed a button on, with the one the app
+    /// said had keyboard focus at that moment. Keys go to the pressed surface,
+    /// as they would after a person's click, until the app's focus moves.
+    /// Each client keeps its own, so one client's click never redirects
+    /// another's keys.
+    last_press: Cell<Option<(window::Id, Option<window::Id>)>>,
+    /// The surface the door's pointer is on, so it can leave it when it
+    /// moves to another (or on `leave`). The app has one pointer, so this is
+    /// shared by every client of the door.
+    pointed: Arc<Mutex<Option<window::Id>>>,
 }
 
 impl Door {
+    fn new(
+        jobs: mpsc::Sender<Job>,
+        wake: Wake,
+        app_id: String,
+        peer: Option<UnixStream>,
+        limits: Limits,
+        max: Max,
+        ops: Ops,
+        pointed: Arc<Mutex<Option<window::Id>>>,
+    ) -> Self {
+        Self {
+            jobs,
+            wake,
+            app_id,
+            peer,
+            limits,
+            max,
+            ops,
+            deadline: Cell::new(None),
+            settle: Cell::new(limits.settle),
+            steps: Cell::new(limits.drag_steps),
+            last_press: Cell::new(None),
+            pointed,
+        }
+    }
+
     fn converse(&self, stream: UnixStream) {
         let Ok(mut writer) = stream.try_clone() else {
             return;
@@ -555,8 +1115,22 @@ impl Door {
                 Ok(0) => return,
                 Ok(_) => {}
                 Err(error) => {
-                    if error.kind() == io::ErrorKind::InvalidData {
-                        let _ = writeln!(writer, "{}", json!({ "error": "request is not UTF-8" }));
+                    match error.kind() {
+                        io::ErrorKind::InvalidData => {
+                            let _ =
+                                writeln!(writer, "{}", json!({ "error": "request is not UTF-8" }));
+                        }
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+                            let _ = writeln!(
+                                writer,
+                                "{}",
+                                json!({ "error": format!(
+                                    "closed: nothing sent for {} ms",
+                                    self.limits.idle_client.as_millis()
+                                ) })
+                            );
+                        }
+                        _ => {}
                     }
 
                     return;
@@ -585,10 +1159,75 @@ impl Door {
         }
     }
 
+    /// A request's own number under `key`, clamped to the administrator's
+    /// cap (`admin`) and the door's bounds; `default` when it gives none.
+    fn requested<T: Ord + Copy>(
+        request: &Value,
+        key: &str,
+        read: impl Fn(u64) -> T,
+        default: T,
+        min: T,
+        admin: Option<T>,
+        max: T,
+    ) -> Result<T, String> {
+        let wanted = match &request[key] {
+            Value::Null => None,
+            value => {
+                Some(read(value.as_u64().ok_or_else(|| {
+                    format!("\"{key}\" must be a whole number")
+                })?))
+            }
+        };
+
+        Ok(clamp(wanted, default, min, admin, max))
+    }
+
     fn handle(&self, request: &Value) -> Result<Value, String> {
         let op = request["op"].as_str().ok_or("missing \"op\"")?;
 
-        self.deadline.set(Some(Instant::now() + REQUEST_TIMEOUT));
+        let allowed = match op {
+            "info" | "tree" | "idle" => self.ops.read,
+            "click" | "hover" | "scroll" | "drag" | "leave" => self.ops.pointer,
+            "type" | "key" => self.ops.keyboard,
+            _ => return Err(format!("unknown op {op:?}")),
+        };
+
+        if !allowed {
+            return Err(format!(
+                "\"{op}\" isn't allowed for this app on this device"
+            ));
+        }
+
+        let millis = Duration::from_millis;
+        let request_timeout = Self::requested(
+            request,
+            "timeout_ms",
+            millis,
+            self.limits.request,
+            HARD_MIN.request,
+            self.max.request,
+            HARD_MAX.request,
+        )?;
+
+        self.settle.set(Self::requested(
+            request,
+            "settle_ms",
+            millis,
+            self.limits.settle,
+            HARD_MIN.settle,
+            self.max.settle,
+            HARD_MAX.settle,
+        )?);
+        self.steps.set(Self::requested(
+            request,
+            "steps",
+            |steps| u16::try_from(steps).unwrap_or(u16::MAX),
+            self.limits.drag_steps,
+            HARD_MIN.drag_steps,
+            self.max.drag_steps,
+            HARD_MAX.drag_steps,
+        )?);
+        self.deadline.set(Some(Instant::now() + request_timeout));
 
         match op {
             "info" => self.info(),
@@ -622,6 +1261,34 @@ impl Door {
                 )?;
 
                 Ok(json!({ "ok": true, "window": window.to_string(), "x": point.x, "y": point.y }))
+            }
+            "leave" => {
+                let window = match self.named_window(request)? {
+                    Some(window) => Some(window),
+                    None => self.pointed(),
+                };
+
+                if let Some(window) = window {
+                    // Leaving another surface than the one pointed at keeps
+                    // that one, so it still gets its own leave later.
+                    if self.pointed() == Some(window) {
+                        self.point(None);
+                    }
+
+                    // A surface that has gone has nothing to leave.
+                    let _ = self.send(
+                        Ask::Inject {
+                            window,
+                            cursor: None,
+                            events: Vec::new(),
+                            leave: Some(window),
+                        },
+                        true,
+                    )?;
+                    self.settle();
+                }
+
+                Ok(json!({ "ok": true, "left": window.map(|window| window.to_string()) }))
             }
             "drag" => {
                 let (window, from) = self.locate(request)?;
@@ -679,19 +1346,47 @@ impl Door {
                 let text = request["text"].as_str().ok_or("\"type\" needs \"text\"")?;
                 let window = self.keyboard_window(request)?;
 
-                for c in text.chars() {
-                    let (key, text) = match c {
-                        ' ' => (keyboard::Key::Named(key::Named::Space), " ".to_owned()),
-                        '\n' | '\r' => (keyboard::Key::Named(key::Named::Enter), "\r".to_owned()),
-                        '\t' => (keyboard::Key::Named(key::Named::Tab), "\t".to_owned()),
-                        c => (
-                            keyboard::Key::Character(SmolStr::new(c.to_string())),
-                            c.to_string(),
-                        ),
-                    };
+                // One batch of presses and releases, settled once: as fast as
+                // the app takes it, and nothing is left held down, whatever
+                // happens to the request.
+                let physical_key = key::Physical::Unidentified(key::NativeCode::Unidentified);
+                let events = text
+                    .chars()
+                    .flat_map(|c| {
+                        let (key, text) = match c {
+                            ' ' => (keyboard::Key::Named(key::Named::Space), " ".to_owned()),
+                            '\n' | '\r' => {
+                                (keyboard::Key::Named(key::Named::Enter), "\r".to_owned())
+                            }
+                            '\t' => (keyboard::Key::Named(key::Named::Tab), "\t".to_owned()),
+                            c => (
+                                keyboard::Key::Character(SmolStr::new(c.to_string())),
+                                c.to_string(),
+                            ),
+                        };
 
-                    self.keys(window, key, keyboard::Modifiers::empty(), Some(text))?;
-                }
+                        [
+                            Event::Keyboard(keyboard::Event::KeyPressed {
+                                key: key.clone(),
+                                modified_key: key.clone(),
+                                physical_key,
+                                location: keyboard::Location::Standard,
+                                modifiers: keyboard::Modifiers::empty(),
+                                text: Some(SmolStr::new(text)),
+                                repeat: false,
+                            }),
+                            Event::Keyboard(keyboard::Event::KeyReleased {
+                                key: key.clone(),
+                                modified_key: key,
+                                physical_key,
+                                location: keyboard::Location::Standard,
+                                modifiers: keyboard::Modifiers::empty(),
+                            }),
+                        ]
+                    })
+                    .collect();
+
+                self.inject(window, None, events)?;
 
                 Ok(json!({ "ok": true }))
             }
@@ -742,10 +1437,7 @@ impl Door {
                 .get()
                 .is_some_and(|deadline| Instant::now() > deadline)
             {
-                return Err(format!(
-                    "stopped: the request took longer than {} s",
-                    REQUEST_TIMEOUT.as_secs()
-                ));
+                return Err("stopped: the request took longer than it was allowed".into());
             }
 
             if self.client_gone() {
@@ -759,32 +1451,35 @@ impl Door {
             .send(Job {
                 ask,
                 answer,
-                deadline: Instant::now() + ANSWER_TIMEOUT - ANSWER_MARGIN,
+                deadline: Instant::now() + self.limits.answer.saturating_sub(ANSWER_MARGIN),
                 cleanup,
             })
             .map_err(|_| "the app has stopped")?;
 
         (self.wake)();
 
-        answered
-            .recv_timeout(ANSWER_TIMEOUT)
-            .map_err(|_| "the app did not answer in time".to_owned())
+        match answered.recv_timeout(self.limits.answer) {
+            Ok(Answer::Unsupported) => Err("the app's event loop doesn't support this".into()),
+            Ok(answer) => Ok(answer),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err("the app has stopped".into()),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err("the app did not answer in time".into()),
+        }
     }
 
-    /// Whether the client has closed its end, without reading anything it sent.
+    /// Whether the client has hung up, without reading anything it sent.
+    ///
+    /// A client that has only shut its writing side (a one-shot `socat`, say)
+    /// is still there to read the answer; only a full close counts.
     fn client_gone(&self) -> bool {
-        use rustix::net::{RecvFlags, recv};
+        use rustix::event::{PollFd, PollFlags, poll};
 
         let Some(peer) = &self.peer else {
             return false;
         };
 
-        let mut byte = [0; 1];
+        let mut fds = [PollFd::new(peer, PollFlags::empty())];
 
-        matches!(
-            recv(peer, &mut byte, RecvFlags::PEEK | RecvFlags::DONTWAIT),
-            Ok(0)
-        )
+        poll(&mut fds, 0).is_ok() && fds[0].revents().intersects(PollFlags::HUP | PollFlags::ERR)
     }
 
     fn info(&self) -> Result<Value, String> {
@@ -823,15 +1518,22 @@ impl Door {
         }
     }
 
-    /// Waits a moment for the app to take in what it was just sent. Best effort:
+    /// Waits a moment for the app to take in what it was just sent, up to the
+    /// request's settle time (none at all for `"settle_ms": 0`). Best effort:
     /// a slow app only makes it give up waiting, never stops what follows.
     fn settle(&self) {
+        let limit = self.settle.get();
+
+        if limit.is_zero() {
+            return;
+        }
+
         let started = Instant::now();
 
-        thread::sleep(Duration::from_millis(16));
+        thread::sleep(POLL.min(limit));
 
-        while started.elapsed() < SETTLE_TIMEOUT && !self.idle().unwrap_or(true) {
-            thread::sleep(Duration::from_millis(16));
+        while started.elapsed() < limit && !self.idle().unwrap_or(true) {
+            thread::sleep(POLL);
         }
     }
 
@@ -861,17 +1563,29 @@ impl Door {
         events: Vec<Event>,
         cleanup: bool,
     ) -> Result<(), String> {
+        // The pointer moving to another surface leaves the one it was on.
+        let leave = if cursor.is_some() {
+            self.pointed().filter(|pointed| *pointed != window)
+        } else {
+            None
+        };
+
         let answer = self.send(
             Ask::Inject {
                 window,
                 cursor,
                 events,
+                leave,
             },
             cleanup,
         )?;
 
         match answer {
             Answer::Injected(true) => {
+                if cursor.is_some() {
+                    self.point(Some(window));
+                }
+
                 self.settle();
                 Ok(())
             }
@@ -911,6 +1625,7 @@ impl Door {
     fn drag(&self, window: window::Id, from: Point, to: Point) -> Result<(), String> {
         let left = mouse::Button::Left;
         let moved = |position| Event::Mouse(mouse::Event::CursorMoved { position });
+        let steps = self.steps.get().max(1);
 
         self.inject(window, Some(from), vec![moved(from)])?;
         self.inject(
@@ -923,9 +1638,9 @@ impl Door {
         let mut at = from;
         let mut travelled = Ok(());
 
-        for step in 1..=DRAG_STEPS {
-            let progress = f32::from(step) / f32::from(DRAG_STEPS);
-            let point = if step == DRAG_STEPS {
+        for step in 1..=steps {
+            let progress = f32::from(step) / f32::from(steps);
+            let point = if step == steps {
                 to
             } else {
                 Point::new(
@@ -1014,13 +1729,22 @@ impl Door {
         pressed.and(lifted)
     }
 
-    /// Remembers that the door pressed a button on `window`, for [`LAST_PRESS`].
+    /// The surface the door's pointer is on.
+    fn pointed(&self) -> Option<window::Id> {
+        self.pointed.lock().ok().and_then(|pointed| *pointed)
+    }
+
+    fn point(&self, window: Option<window::Id>) {
+        if let Ok(mut pointed) = self.pointed.lock() {
+            *pointed = window;
+        }
+    }
+
+    /// Remembers that this client pressed a button on `window`, for `last_press`.
     fn pressed(&self, window: window::Id) {
         let focused = self.focused().ok().flatten();
 
-        if let Ok(mut last) = LAST_PRESS.lock() {
-            *last = Some((window, focused));
-        }
+        self.last_press.set(Some((window, focused)));
     }
 
     fn focused(&self) -> Result<Option<window::Id>, String> {
@@ -1030,18 +1754,17 @@ impl Door {
         }
     }
 
-    /// The window named in the request; or else the one the door last clicked,
-    /// unless the app's keyboard focus has moved since; or else the one with
-    /// keyboard focus.
+    /// The window named in the request; or else the one this client last
+    /// clicked, unless the app's keyboard focus has moved since; or else the
+    /// one with keyboard focus.
     fn keyboard_window(&self, request: &Value) -> Result<window::Id, String> {
         if let Some(window) = self.named_window(request)? {
             return Ok(window);
         }
 
         let focused = self.focused()?;
-        let last = LAST_PRESS.lock().ok().and_then(|last| *last);
 
-        if let Some((pressed, focused_then)) = last
+        if let Some((pressed, focused_then)) = self.last_press.get()
             && focused_then == focused
         {
             let Answer::Info(surfaces) = self.ask(Ask::Info)? else {
@@ -1252,19 +1975,25 @@ fn node_json(node: &Node) -> Value {
 /// [`Collector::into_nodes`] back in [`Answer::Tree`].
 ///
 /// A widget that paints its children moved from their layout can say so: it
-/// reports the offset as a [`Vector`] through `custom`, right before walking
-/// into them, and they are then placed where it paints them. (icetron's
-/// `AnimatedTranslate` does this.)
+/// reports a [`PaintedOffset`] through `custom`, right before walking into
+/// them, and they are then placed where it paints them. (icetron's
+/// `AnimatedTranslate` does this.) A widget that keeps children it doesn't
+/// show reports [`Hidden`] the same way, and none of them counts as visible.
 #[derive(Debug)]
 pub struct Collector {
     window: window::Id,
     popup: bool,
     nodes: Vec<Node>,
-    stack: Vec<(Rectangle, Vector)>,
+    /// The viewport, translation and hiddenness to go back to after a walk.
+    stack: Vec<(Rectangle, Vector, bool)>,
     viewport: Rectangle,
     translation: Vector,
+    /// Whether the walk is inside something kept but not shown.
+    hidden: bool,
     /// A painted offset reported through `custom`, for the next `traverse`.
     shift: Option<Vector>,
+    /// Whether the next `traverse` walks into something not shown.
+    hide: bool,
 }
 
 impl Collector {
@@ -1277,10 +2006,12 @@ impl Collector {
             window,
             popup,
             nodes: Vec::new(),
-            stack: vec![(viewport, Vector::ZERO)],
+            stack: vec![(viewport, Vector::ZERO, false)],
             viewport,
             translation: Vector::ZERO,
+            hidden: false,
             shift: None,
+            hide: false,
         }
     }
 
@@ -1297,8 +2028,10 @@ impl Collector {
         bounds: Rectangle,
         focused: bool,
     ) {
-        // An offset applies to the walk right after it, not to siblings.
+        // An offset or a hiding applies to the walk right after it, not to
+        // siblings.
         self.shift = None;
+        self.hide = false;
         let bounds = bounds + self.translation;
 
         self.nodes.push(Node {
@@ -1308,7 +2041,11 @@ impl Collector {
             id: id.and_then(Id::as_str).map(str::to_owned),
             text: text.map(str::to_owned),
             bounds,
-            visible: self.viewport.intersection(&bounds),
+            visible: if self.hidden {
+                None
+            } else {
+                self.viewport.intersection(&bounds)
+            },
             focused,
         });
     }
@@ -1316,16 +2053,21 @@ impl Collector {
 
 impl Operation for Collector {
     fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
-        self.stack.push((self.viewport, self.translation));
+        self.stack
+            .push((self.viewport, self.translation, self.hidden));
         if let Some(shift) = self.shift.take() {
             self.translation += shift;
+        }
+        if std::mem::take(&mut self.hide) {
+            self.hidden = true;
         }
         operate(self);
         let _ = self.stack.pop();
 
-        if let Some((viewport, translation)) = self.stack.last() {
+        if let Some((viewport, translation, hidden)) = self.stack.last() {
             self.viewport = *viewport;
             self.translation = *translation;
+            self.hidden = *hidden;
         }
     }
 
@@ -1336,7 +2078,18 @@ impl Operation for Collector {
     }
 
     fn focusable(&mut self, id: Option<&Id>, bounds: Rectangle, state: &mut dyn Focusable) {
-        self.push("focusable", id, None, bounds, state.is_focused());
+        let focused = state.is_focused();
+
+        // A text input reports itself, then its focus, in the same place: the
+        // input is as focused as its focusable.
+        if let Some(input) = self.nodes.last_mut()
+            && input.kind == "text_input"
+            && input.bounds == bounds + self.translation
+        {
+            input.focused = focused;
+        }
+
+        self.push("focusable", id, None, bounds, focused);
     }
 
     fn scrollable(
@@ -1364,7 +2117,11 @@ impl Operation for Collector {
     }
 
     fn custom(&mut self, _id: Option<&Id>, _bounds: Rectangle, state: &mut dyn std::any::Any) {
-        self.shift = state.downcast_ref::<Vector>().copied();
+        if let Some(PaintedOffset(offset)) = state.downcast_ref::<PaintedOffset>() {
+            self.shift = Some(*offset);
+        } else if state.is::<Hidden>() {
+            self.hide = true;
+        }
     }
 }
 
@@ -1374,11 +2131,15 @@ mod tests {
 
     use crate::core::widget::operation::scrollable::{AbsoluteOffset, RelativeOffset};
 
+    /// A scratch folder with a short path (sockets must fit in 108 bytes, and
+    /// a nested nix-shell's `TMPDIR` can be 140 characters long on its own).
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "iced-automation-test-{name}-{}",
-            std::process::id()
-        ));
+        let base = if Path::new("/tmp").is_dir() {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let dir = base.join(format!("ia-{name}-{}", std::process::id()));
 
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create scratch folder");
@@ -1387,18 +2148,52 @@ mod tests {
         dir
     }
 
+    /// A private runtime folder in `dir`, as `XDG_RUNTIME_DIR` must be.
+    fn runtime(dir: &Path) -> PathBuf {
+        let runtime = dir.join("run");
+        fs::create_dir_all(&runtime).expect("create runtime folder");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).expect("chmod");
+
+        runtime
+    }
+
+    /// The owners a switch may have in these tests: root, and whoever owns
+    /// what a test can't create itself (this user; the owner of `/`, which is
+    /// not root in a Nix sandbox; the owner of the scratch base). So a switch a
+    /// test makes can be accepted, and every other rule still checked.
+    fn trusted() -> Vec<u32> {
+        let owner = |path: &str| fs::metadata(path).map_or(0, |metadata| metadata.uid());
+
+        vec![
+            0,
+            rustix::process::geteuid().as_raw(),
+            owner("/"),
+            owner("/tmp"),
+        ]
+    }
+
     fn noop() -> Wake {
         Arc::new(|| {})
     }
 
+    /// Tests that open a real door take turns: there is one per process.
+    static REAL_DOOR: Mutex<()> = Mutex::new(());
+
+    fn real_door() -> std::sync::MutexGuard<'static, ()> {
+        REAL_DOOR
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     fn stays_shut_without_the_switch() {
+        let _turn = real_door();
         let dir = scratch("no-switch");
-        let runtime = dir.join("runtime");
-        fs::create_dir_all(&runtime).expect("create runtime folder");
+        let runtime = runtime(&dir);
 
-        let opened = start_with(
-            &dir.join("automation-enabled"),
+        let opened = open_door(
+            Config::new().switch(dir.join("automation-enabled")),
+            &trusted(),
             Some(runtime.clone()),
             Some("test"),
             noop(),
@@ -1409,7 +2204,7 @@ mod tests {
             !runtime.join("iced-automation").exists(),
             "a shut door must leave nothing behind"
         );
-        assert!(INBOX.get().is_none());
+        assert!(!is_open());
     }
 
     #[test]
@@ -1418,12 +2213,24 @@ mod tests {
         let switch = dir.join("automation-enabled");
         fs::write(&switch, "").expect("create switch");
 
+        fs::set_permissions(&switch, fs::Permissions::from_mode(0o644)).expect("chmod");
+        assert!(
+            switch_is_on(&switch, &trusted()),
+            "the same file, not writable, counts"
+        );
+
         fs::set_permissions(&switch, fs::Permissions::from_mode(0o666)).expect("chmod");
-        assert!(!switch_is_on(&switch));
+        assert!(!switch_is_on(&switch, &trusted()));
+
+        fs::set_permissions(&switch, fs::Permissions::from_mode(0o664)).expect("chmod");
+        assert!(!switch_is_on(&switch, &trusted()), "group-writable");
 
         fs::set_permissions(&switch, fs::Permissions::from_mode(0o644)).expect("chmod");
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o775)).expect("chmod");
-        assert!(!switch_is_on(&switch));
+        assert!(
+            !switch_is_on(&switch, &trusted()),
+            "in a folder others can write"
+        );
     }
 
     #[test]
@@ -1433,19 +2240,60 @@ mod tests {
         fs::create_dir_all(&switch).expect("create folder");
         fs::set_permissions(&switch, fs::Permissions::from_mode(0o755)).expect("chmod");
 
-        assert!(!switch_is_on(&switch));
+        assert!(!switch_is_on(&switch, &trusted()));
     }
 
     #[test]
-    fn only_root_can_turn_it_on() {
+    fn only_the_trusted_owner_can_turn_it_on() {
         let dir = scratch("owner");
         let switch = dir.join("automation-enabled");
         fs::write(&switch, "").expect("create switch");
         fs::set_permissions(&switch, fs::Permissions::from_mode(0o644)).expect("chmod");
 
-        let made_by_root = fs::metadata(&switch).expect("metadata").uid() == 0;
+        assert!(switch_is_on(&switch, &trusted()));
 
-        assert_eq!(switch_is_on(&switch), made_by_root);
+        // As it runs for real, trusting only root: a file this user made
+        // doesn't count (unless the tests run as root).
+        let made_by_root = fs::metadata(&switch).expect("metadata").uid() == 0;
+        let tree_is_roots = fs::metadata("/").expect("/").uid() == 0;
+
+        assert_eq!(switch_is_on(&switch, &[0]), made_by_root && tree_is_roots);
+    }
+
+    #[test]
+    fn a_nixos_etc_link_into_the_store_counts() {
+        // /etc/x -> /etc/static/x, /etc/static -> /nix/store/…-etc/etc, with
+        // the store sticky, as NixOS's `environment.etc` lays it out.
+        let dir = scratch("nixos");
+        let store = dir.join("store");
+        let generation = store.join("abc-etc").join("etc");
+        fs::create_dir_all(&generation).expect("create store");
+        fs::set_permissions(&store, fs::Permissions::from_mode(0o1775)).expect("chmod");
+        fs::set_permissions(store.join("abc-etc"), fs::Permissions::from_mode(0o555))
+            .expect("chmod");
+        fs::write(generation.join("automation-enabled"), "").expect("create switch");
+        fs::set_permissions(
+            generation.join("automation-enabled"),
+            fs::Permissions::from_mode(0o444),
+        )
+        .expect("chmod");
+        fs::set_permissions(&generation, fs::Permissions::from_mode(0o555)).expect("chmod");
+
+        let etc = dir.join("etc");
+        fs::create_dir_all(&etc).expect("create etc");
+        std::os::unix::fs::symlink(&generation, etc.join("static")).expect("link");
+        std::os::unix::fs::symlink("static/automation-enabled", etc.join("automation-enabled"))
+            .expect("link");
+
+        assert!(switch_is_on(&etc.join("automation-enabled"), &trusted()));
+
+        // A link to nothing keeps the door shut.
+        std::os::unix::fs::symlink("static/nothing-here", etc.join("dangling")).expect("link");
+        assert!(!switch_is_on(&etc.join("dangling"), &trusted()));
+
+        // Let the scratch folder be removed next time.
+        let _ = fs::set_permissions(&generation, fs::Permissions::from_mode(0o755));
+        let _ = fs::set_permissions(store.join("abc-etc"), fs::Permissions::from_mode(0o755));
     }
 
     #[test]
@@ -1463,21 +2311,22 @@ mod tests {
         std::os::unix::fs::symlink(&target, &switch).expect("link");
 
         assert!(
-            !switch_is_on(&switch),
+            !switch_is_on(&switch, &trusted()),
             "anyone may replace a file in {open:?}"
         );
 
         // A sticky folder (like /nix/store) is fine: others can't replace root's files.
         fs::set_permissions(&open, fs::Permissions::from_mode(0o1777)).expect("chmod");
 
-        let made_by_root = fs::metadata(&target).expect("metadata").uid() == 0;
-
-        assert_eq!(switch_is_on(&switch), made_by_root);
+        assert!(switch_is_on(&switch, &trusted()));
 
         // A relative link, through `..`, is walked the same way.
         let relative = dir.join("relative");
         std::os::unix::fs::symlink("../link-placeholder/../open/target", &relative).expect("link");
-        assert!(!switch_is_on(&relative), "a missing step on the way fails");
+        assert!(
+            !switch_is_on(&relative, &trusted()),
+            "a missing step on the way fails"
+        );
     }
 
     #[test]
@@ -1494,8 +2343,41 @@ mod tests {
     }
 
     #[test]
+    fn a_runtime_folder_others_can_open_is_refused() {
+        let dir = scratch("open-runtime");
+        let runtime = runtime(&dir);
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        assert!(
+            listen(&runtime, Some("test")).is_err_and(|error| error.to_string().contains("0700"))
+        );
+        assert!(!runtime.join("iced-automation").exists());
+    }
+
+    #[test]
+    fn a_long_app_id_still_fits_in_a_socket_path() {
+        let dir = runtime(&scratch("long"));
+        let long = "org.example.a-very-long-application-identifier-that-goes-on.and-on.and-on";
+        let (_listener, path) = listen(&dir, Some(long)).expect("listen");
+
+        assert!(path.as_os_str().len() < 108, "{path:?}");
+
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("name");
+        assert!(name.starts_with("org.example.a-very-long"), "{name}");
+        assert!(name.ends_with(&format!("-{}.sock", std::process::id())));
+
+        // Two long names that differ only at the end don't collide.
+        let other = format!("{long}2");
+        let (_other_listener, other_path) = listen(&dir, Some(&other)).expect("listen");
+        assert_ne!(path, other_path);
+    }
+
+    #[test]
     fn the_socket_is_private_to_the_user() {
-        let dir = scratch("socket");
+        let dir = runtime(&scratch("socket"));
         let (_listener, path) = listen(&dir, Some("org.kora/slate")).expect("listen");
 
         assert_eq!(
@@ -1613,6 +2495,8 @@ mod tests {
         injected: Arc<Mutex<Vec<(Option<Point>, Vec<Event>)>>>,
         /// The window each injection went to, in order.
         targets: Arc<Mutex<Vec<window::Id>>>,
+        /// The surface each injection's pointer left first, in order.
+        left: Arc<Mutex<Vec<Option<window::Id>>>>,
     }
 
     fn fake_loop(nodes: Vec<Node>, fails: fn(&[Event]) -> bool) -> FakeLoop {
@@ -1633,6 +2517,8 @@ mod tests {
         let record = injected.clone();
         let targets = Arc::new(Mutex::new(Vec::new()));
         let targeted = targets.clone();
+        let left = Arc::new(Mutex::new(Vec::new()));
+        let leaving = left.clone();
 
         let _ = thread::spawn(move || {
             while let Ok(job) = inbox.recv() {
@@ -1640,12 +2526,14 @@ mod tests {
                     Ask::Info => Answer::Info(
                         std::iter::once(window)
                             .chain(focused)
-                            .map(|surface| Surface {
-                                window: surface,
-                                popup: false,
-                                size: Size::new(800.0, 600.0),
-                                scale_factor: 1.0,
-                                focused: Some(surface) == focused.or(Some(window)),
+                            .map(|surface| {
+                                Surface::new(
+                                    surface,
+                                    false,
+                                    Size::new(800.0, 600.0),
+                                    1.0,
+                                    Some(surface) == focused.or(Some(window)),
+                                )
                             })
                             .collect(),
                     ),
@@ -1656,12 +2544,14 @@ mod tests {
                         window: target,
                         cursor,
                         events,
+                        leave,
                     } => {
                         let refused = fails(&events);
 
                         if !refused {
                             record.lock().expect("record").push((cursor, events));
                             targeted.lock().expect("targets").push(target);
+                            leaving.lock().expect("left").push(leave);
                         }
 
                         Answer::Injected(!refused)
@@ -1673,15 +2563,19 @@ mod tests {
         });
 
         FakeLoop {
-            door: Door {
+            door: Door::new(
                 jobs,
-                wake: noop(),
-                app_id: "test".into(),
-                peer: None,
-                deadline: Cell::new(None),
-            },
+                noop(),
+                "test".into(),
+                None,
+                DEFAULTS,
+                Max::default(),
+                Ops::ALL,
+                Arc::new(Mutex::new(None)),
+            ),
             injected,
             targets,
+            left,
         }
     }
 
@@ -1777,7 +2671,7 @@ mod tests {
         let events = pointer_events(&fake);
 
         assert_eq!(events[..2], ["move 10,10", "press"]);
-        assert_eq!(events.len(), 2 + usize::from(DRAG_STEPS) + 1);
+        assert_eq!(events.len(), 2 + usize::from(DEFAULTS.drag_steps) + 1);
         assert_eq!(events[events.len() - 2..], ["move 90,10", "release"]);
 
         assert!(
@@ -2037,7 +2931,8 @@ mod tests {
 
     #[test]
     fn the_socket_goes_when_the_door_closes() {
-        let dir = scratch("close");
+        let _turn = real_door();
+        let dir = runtime(&scratch("close"));
         let (listener, path) = listen(&dir, Some("test")).expect("listen");
         drop(listener);
 
@@ -2078,18 +2973,523 @@ mod tests {
         let at = |y| Rectangle::new(Point::new(10.0, y), Size::new(50.0, 20.0));
 
         // A translated widget: its offset, then its children.
-        collector.custom(None, at(200.0), &mut Vector::<f32>::new(0.0, -40.0));
+        collector.custom(None, at(200.0), &mut PaintedOffset(Vector::new(0.0, -40.0)));
         collector.traverse(&mut |collector| collector.text(None, at(200.0), "Raised"));
         // Its next sibling is where it is laid out.
         collector.text(None, at(240.0), "Below");
         // An offset with no walk after it moves nothing.
-        collector.custom(None, at(0.0), &mut Vector::<f32>::new(0.0, 100.0));
+        collector.custom(None, at(0.0), &mut PaintedOffset(Vector::new(0.0, 100.0)));
         collector.text(None, at(260.0), "Still here");
-        // Other custom reports are ignored.
+        // Other custom reports are ignored, a bare `Vector` included.
         collector.custom(None, at(0.0), &mut 7_u8);
+        collector.custom(None, at(0.0), &mut Vector::<f32>::new(0.0, 100.0));
         collector.traverse(&mut |collector| collector.text(None, at(280.0), "Plain"));
 
         let ys: Vec<f32> = collector.nodes.iter().map(|node| node.bounds.y).collect();
         assert_eq!(ys, [160.0, 240.0, 260.0, 280.0]);
+    }
+
+    #[test]
+    fn what_is_kept_but_not_shown_is_never_visible() {
+        let mut collector = Collector::new(window::Id::unique(), false, Size::new(400.0, 300.0));
+        let at = |y| Rectangle::new(Point::new(10.0, y), Size::new(50.0, 20.0));
+
+        // A covered page: hidden, then walked into; a name inside it too.
+        collector.custom(None, at(0.0), &mut Hidden);
+        collector.traverse(&mut |collector| {
+            collector.container(Some(&Id::new("composer.send")), at(10.0));
+            collector.traverse(&mut |collector| collector.text(None, at(10.0), "Send"));
+        });
+        // The page on top is shown.
+        collector.traverse(&mut |collector| collector.text(None, at(10.0), "Inbox"));
+        // A hiding with no walk after it hides nothing.
+        collector.custom(None, at(0.0), &mut Hidden);
+        collector.text(None, at(40.0), "Shown");
+
+        let visible: Vec<(Option<&str>, Option<&str>, bool)> = collector
+            .nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.id.as_deref(),
+                    node.text.as_deref(),
+                    node.visible.is_some(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            visible,
+            [
+                (Some("composer.send"), None, false),
+                (None, Some("Send"), false),
+                (None, Some("Inbox"), true),
+                (None, Some("Shown"), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_text_input_is_as_focused_as_its_focusable() {
+        struct Field(bool);
+
+        impl Focusable for Field {
+            fn is_focused(&self) -> bool {
+                self.0
+            }
+            fn focus(&mut self) {}
+            fn unfocus(&mut self) {}
+        }
+
+        impl TextInput for Field {
+            fn text(&self) -> &str {
+                "Name"
+            }
+            fn move_cursor_to_front(&mut self) {}
+            fn move_cursor_to_end(&mut self) {}
+            fn move_cursor_to(&mut self, _position: usize) {}
+            fn select_all(&mut self) {}
+            fn select_range(&mut self, _start: usize, _end: usize) {}
+        }
+
+        let mut collector = Collector::new(window::Id::unique(), false, Size::new(400.0, 300.0));
+        let at = |y| Rectangle::new(Point::new(10.0, y), Size::new(100.0, 20.0));
+
+        // As iced's text input reports itself: the input, then its focus.
+        collector.text_input(None, at(10.0), &mut Field(true));
+        collector.focusable(None, at(10.0), &mut Field(true));
+        collector.text_input(None, at(40.0), &mut Field(false));
+        collector.focusable(None, at(40.0), &mut Field(false));
+
+        let inputs: Vec<bool> = collector
+            .nodes
+            .iter()
+            .filter(|node| node.kind == "text_input")
+            .map(|node| node.focused)
+            .collect();
+
+        assert_eq!(inputs, [true, false]);
+    }
+
+    #[test]
+    fn a_switch_file_is_empty_or_json_the_door_knows() {
+        assert_eq!(parse_policy(""), Ok(Policy::default()));
+        assert_eq!(parse_policy("  \n"), Ok(Policy::default()));
+
+        let policy = parse_policy(
+            r#"{ "max": { "settle_ms": 100, "steps": 4, "clients": 2 },
+                 "ops": ["read", "pointer"],
+                 "apps": ["org.example.app"] }"#,
+        )
+        .expect("policy");
+
+        assert_eq!(policy.max.settle, Some(Duration::from_millis(100)));
+        assert_eq!(policy.max.drag_steps, Some(4));
+        assert_eq!(policy.max.clients, Some(2));
+        assert_eq!(policy.max.request, None);
+        assert_eq!(
+            policy.ops,
+            Ops {
+                read: true,
+                pointer: true,
+                keyboard: false
+            }
+        );
+        assert!(policy.allows("org.example.app"));
+        assert!(!policy.allows("org.example.other"));
+
+        // Anything else keeps the door shut: a typo must not open it wider.
+        for bad in [
+            "yes",
+            "{",
+            "[]",
+            r#"{ "maximum": {} }"#,
+            r#"{ "max": { "settle": 100 } }"#,
+            r#"{ "max": { "settle_ms": -1 } }"#,
+            r#"{ "ops": ["everything"] }"#,
+            r#"{ "apps": "org.example.app" }"#,
+        ] {
+            assert!(parse_policy(bad).is_err(), "{bad} was accepted");
+        }
+    }
+
+    #[test]
+    fn numbers_stay_within_the_bounds_the_app_and_the_admin_set() {
+        // The app asks for more than the hard ceiling, and less than the floor.
+        let config = Config::new()
+            .request_timeout(Duration::from_secs(100_000))
+            .settle_timeout(Duration::from_millis(250))
+            .max_clients(0);
+        let limits = Limits::resolve(&config, &Max::default());
+
+        assert_eq!(limits.request, HARD_MAX.request);
+        assert_eq!(limits.settle, Duration::from_millis(250));
+        assert_eq!(limits.clients, HARD_MIN.clients);
+        assert_eq!(limits.answer, DEFAULTS.answer);
+
+        // The administrator's caps win over the app's wishes.
+        let max = Max {
+            settle: Some(Duration::from_millis(100)),
+            clients: Some(2),
+            ..Max::default()
+        };
+        let limits = Limits::resolve(&Config::new().max_clients(16), &max);
+
+        assert_eq!(limits.settle, Duration::from_millis(100));
+        assert_eq!(limits.clients, 2);
+
+        // And over a request's.
+        let fake = fake_loop(vec![], |_| false);
+        let door = Door { max, ..fake.door };
+        let _ = door
+            .handle(&json!({ "op": "idle", "settle_ms": 5000, "steps": 1000 }))
+            .expect("idle");
+
+        assert_eq!(door.settle.get(), Duration::from_millis(100));
+        assert_eq!(door.steps.get(), HARD_MAX.drag_steps);
+        assert!(
+            door.handle(&json!({ "op": "idle", "timeout_ms": "soon" }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_drag_takes_the_steps_it_asks_for() {
+        let window = window::Id::unique();
+        let fake = fake_loop(
+            vec![node(
+                window,
+                "text",
+                None,
+                Some("Handle"),
+                Rectangle::new(Point::new(0.0, 0.0), Size::new(20.0, 20.0)),
+            )],
+            |_| false,
+        );
+
+        let _ = fake
+            .door
+            .handle(
+                &json!({ "op": "drag", "text": "Handle", "dx": 30, "steps": 3, "settle_ms": 0 }),
+            )
+            .expect("drag");
+
+        // Move there, press, three moves, release.
+        assert_eq!(pointer_events(&fake).len(), 2 + 3 + 1);
+    }
+
+    #[test]
+    fn ops_the_device_leaves_out_are_refused() {
+        let window = window::Id::unique();
+        let fake = fake_loop(
+            vec![node(
+                window,
+                "text",
+                None,
+                Some("Save"),
+                Rectangle::new(Point::new(0.0, 0.0), Size::new(20.0, 20.0)),
+            )],
+            |_| false,
+        );
+        let door = Door {
+            ops: Ops::READ,
+            ..fake.door
+        };
+
+        assert!(door.handle(&json!({ "op": "tree" })).is_ok());
+        assert!(
+            door.handle(&json!({ "op": "click", "text": "Save" }))
+                .is_err_and(|error| error.contains("isn't allowed"))
+        );
+        assert!(
+            door.handle(&json!({ "op": "type", "text": "rm -rf ~" }))
+                .is_err()
+        );
+        assert!(fake.injected.lock().expect("record").is_empty());
+    }
+
+    #[test]
+    fn typing_is_one_batch_of_presses_and_releases() {
+        let window = window::Id::unique();
+        let fake = fake_loop(
+            vec![node(window, "focusable", None, None, Rectangle::default())],
+            |_| false,
+        );
+
+        let _ = fake
+            .door
+            .handle(&json!({ "op": "type", "text": "ab c" }))
+            .expect("type");
+
+        let injected = fake.injected.lock().expect("record");
+        assert_eq!(injected.len(), 1, "one injection for the whole string");
+
+        let kinds: Vec<&str> = injected[0]
+            .1
+            .iter()
+            .map(|event| match event {
+                Event::Keyboard(keyboard::Event::KeyPressed { .. }) => "down",
+                Event::Keyboard(keyboard::Event::KeyReleased { .. }) => "up",
+                _ => "other",
+            })
+            .collect();
+
+        assert_eq!(
+            kinds,
+            ["down", "up", "down", "up", "down", "up", "down", "up"]
+        );
+    }
+
+    #[test]
+    fn each_client_keeps_its_own_click_for_keys() {
+        let window = window::Id::unique();
+        let elsewhere = window::Id::unique();
+        let field = Rectangle::new(Point::new(10.0, 10.0), Size::new(100.0, 20.0));
+        let first = fake_loop_focused(
+            vec![node(
+                window,
+                "text_input",
+                Some("name"),
+                Some("Name"),
+                field,
+            )],
+            |_| false,
+            Some(elsewhere),
+        );
+        let second = fake_loop_focused(
+            vec![node(
+                window,
+                "text_input",
+                Some("name"),
+                Some("Name"),
+                field,
+            )],
+            |_| false,
+            Some(elsewhere),
+        );
+
+        // The first client clicks; the second, which didn't, types.
+        let _ = first
+            .door
+            .handle(&json!({ "op": "click", "id": "name" }))
+            .expect("click");
+        let _ = second
+            .door
+            .handle(&json!({ "op": "type", "text": "x" }))
+            .expect("type");
+
+        assert_eq!(
+            second.targets.lock().expect("targets").as_slice(),
+            [elsewhere],
+            "keys follow the app's focus, not another client's click"
+        );
+    }
+
+    #[test]
+    fn the_pointer_leaves_one_surface_for_another() {
+        let window = window::Id::unique();
+        let popup = window::Id::unique();
+        let at = Rectangle::new(Point::new(0.0, 0.0), Size::new(20.0, 20.0));
+        let fake = fake_loop(
+            vec![
+                node(window, "text", None, Some("Open"), at),
+                node(popup, "text", None, Some("Item"), at),
+            ],
+            |_| false,
+        );
+
+        let _ = fake
+            .door
+            .handle(&json!({ "op": "hover", "text": "Open" }))
+            .expect("hover");
+        let _ = fake
+            .door
+            .handle(&json!({ "op": "hover", "text": "Item" }))
+            .expect("hover");
+        let _ = fake.door.handle(&json!({ "op": "leave" })).expect("leave");
+        let after = fake.door.handle(&json!({ "op": "leave" })).expect("leave");
+
+        assert_eq!(
+            fake.left.lock().expect("left").as_slice(),
+            [None, Some(window), Some(popup)],
+            "first nothing to leave, then the window for the popup, then the popup"
+        );
+        assert_eq!(after["left"], Value::Null, "nothing left to leave");
+    }
+
+    #[test]
+    fn leaving_another_surface_keeps_the_one_pointed_at() {
+        let window = window::Id::unique();
+        let popup = window::Id::unique();
+        let at = Rectangle::new(Point::new(0.0, 0.0), Size::new(20.0, 20.0));
+        let fake = fake_loop(
+            vec![
+                node(window, "text", None, Some("Open"), at),
+                node(popup, "text", None, Some("Item"), at),
+            ],
+            |_| false,
+        );
+
+        let _ = fake
+            .door
+            .handle(&json!({ "op": "hover", "text": "Item" }))
+            .expect("hover");
+        let _ = fake
+            .door
+            .handle(&json!({ "op": "leave", "window": window.to_string() }))
+            .expect("leave");
+        let _ = fake
+            .door
+            .handle(&json!({ "op": "hover", "text": "Open" }))
+            .expect("hover");
+
+        // The popup is still pointed at after the window was left, so moving
+        // onto the window leaves the popup.
+        let left = fake.left.lock().expect("left").clone();
+        assert_eq!(left.last(), Some(&Some(popup)), "{left:?}");
+    }
+
+    #[test]
+    fn another_client_can_move_the_pointer_off() {
+        let window = window::Id::unique();
+        let at = Rectangle::new(Point::new(0.0, 0.0), Size::new(20.0, 20.0));
+        let fake = fake_loop(vec![node(window, "text", None, Some("Tip"), at)], |_| false);
+
+        // A test driver connects once per request, as door.py and koraqa do.
+        let next = Door::new(
+            fake.door.jobs.clone(),
+            noop(),
+            "test".into(),
+            None,
+            DEFAULTS,
+            Max::default(),
+            Ops::ALL,
+            fake.door.pointed.clone(),
+        );
+
+        let _ = fake
+            .door
+            .handle(&json!({ "op": "hover", "text": "Tip" }))
+            .expect("hover");
+        let left = next.handle(&json!({ "op": "leave" })).expect("leave");
+
+        assert_eq!(left["left"], json!(window.to_string()));
+        assert_eq!(fake.left.lock().expect("left").last(), Some(&Some(window)));
+    }
+
+    #[test]
+    fn a_client_that_only_stopped_writing_still_gets_its_answer() {
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        let fake = fake_loop(vec![], |_| false);
+        let door = Door {
+            peer: Some(ours),
+            ..fake.door
+        };
+
+        // `echo '{"op":"info"}' | socat - UNIX-CONNECT:…` does this.
+        theirs
+            .shutdown(std::net::Shutdown::Write)
+            .expect("shutdown");
+
+        assert!(!door.client_gone());
+        assert!(door.handle(&json!({ "op": "info" })).is_ok());
+
+        drop(theirs);
+        assert!(door.client_gone());
+    }
+
+    /// Answers the door from a thread until `stop`, like an event loop would.
+    fn serve_until(stop: Arc<AtomicBool>) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                serve(|ask| match ask {
+                    Ask::Info => Answer::Info(Vec::new()),
+                    Ask::Idle => Answer::Idle(true),
+                    _ => Answer::Unsupported,
+                });
+                thread::sleep(Duration::from_millis(5));
+            }
+        })
+    }
+
+    fn ask_door(path: &Path, request: &str) -> Value {
+        let mut stream = UnixStream::connect(path).expect("connect");
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+        // A refused client may find the door already closed for writing.
+        let _ = writeln!(stream, "{request}");
+
+        let mut line = String::new();
+        let _ = BufReader::new(stream).read_line(&mut line).expect("read");
+
+        serde_json::from_str(&line).expect("JSON")
+    }
+
+    #[test]
+    fn the_switch_is_read_again_for_every_client() {
+        let _turn = real_door();
+        let dir = scratch("recheck");
+        let runtime = runtime(&dir);
+        let switch = dir.join("automation-enabled");
+        fs::write(&switch, "").expect("create switch");
+        fs::set_permissions(&switch, fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        let open = open_door(
+            Config::new()
+                .switch(&switch)
+                .idle_client_timeout(Duration::from_secs(1)),
+            &trusted(),
+            Some(runtime),
+            Some("org.example.app"),
+            noop(),
+        )
+        .expect("the door opens");
+        let stop = Arc::new(AtomicBool::new(false));
+        let looping = serve_until(stop.clone());
+
+        assert_eq!(
+            ask_door(open.path(), r#"{"op":"info"}"#)["app_id"],
+            "org.example.app"
+        );
+
+        // An administrator narrows it to another app: new clients are turned away.
+        fs::set_permissions(&switch, fs::Permissions::from_mode(0o644)).expect("chmod");
+        fs::write(&switch, r#"{"apps":["org.example.other"]}"#).expect("write switch");
+        assert!(
+            ask_door(open.path(), r#"{"op":"info"}"#)["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("doesn't list this app"))
+        );
+
+        // ...and removes it: the door is shut, without restarting the app.
+        fs::remove_file(&switch).expect("remove switch");
+        assert!(
+            ask_door(open.path(), r#"{"op":"info"}"#)["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("is off"))
+        );
+
+        // A client that sends nothing gives its place up.
+        fs::write(&switch, "").expect("create switch");
+        let mut quiet = UnixStream::connect(open.path()).expect("connect");
+        let _ = quiet.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut line = String::new();
+        let _ = BufReader::new(quiet.try_clone().expect("clone"))
+            .read_line(&mut line)
+            .expect("read");
+        assert!(line.contains("nothing sent"), "{line}");
+        let _ = quiet.flush();
+
+        // Once the loop stops and drops the door, waiting clients are told.
+        let mut waiting = UnixStream::connect(open.path()).expect("connect");
+        let _ = waiting.set_read_timeout(Some(Duration::from_secs(10)));
+        stop.store(true, Ordering::SeqCst);
+        looping.join().expect("loop");
+        drop(open);
+        assert!(!is_open());
+
+        writeln!(waiting, r#"{{"op":"info"}}"#).expect("send");
+        let mut line = String::new();
+        let _ = BufReader::new(waiting).read_line(&mut line).expect("read");
+        assert!(line.contains("the app has stopped"), "{line}");
     }
 }

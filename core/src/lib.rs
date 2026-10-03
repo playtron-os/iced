@@ -13,6 +13,7 @@ pub mod adaptive_foreground;
 pub mod alignment;
 pub mod animation;
 pub mod auto_hide;
+pub mod automation;
 pub mod border;
 pub mod clipboard;
 pub mod dismiss;

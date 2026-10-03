@@ -4,6 +4,10 @@
 //!
 //! Only the placeholder is checked here: these tests build without a
 //! renderer backend, and an editor's content needs one to hold any text.
+//!
+//! Skipped with the `wgpu` feature: it builds the renderer without a backend,
+//! so the simulator can't make one.
+#![cfg(not(feature = "wgpu"))]
 use iced_test::Simulator;
 use iced_widget::core::{Element, Theme};
 use iced_widget::text_editor::{Content, TextEditor};

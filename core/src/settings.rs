@@ -51,6 +51,11 @@ pub struct Settings {
     ///
     /// By default, it is enabled.
     pub system_fonts: bool,
+
+    /// How the app's automation door behaves, when the `automation` feature
+    /// builds one in and an administrator has switched it on. The defaults
+    /// suit most apps.
+    pub automation: crate::automation::Config,
 }
 
 impl Default for Settings {
@@ -63,6 +68,7 @@ impl Default for Settings {
             antialiasing: true,
             vsync: true,
             system_fonts: true,
+            automation: crate::automation::Config::default(),
         }
     }
 }

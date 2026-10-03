@@ -526,6 +526,7 @@ pub mod advanced;
 
 pub use crate::core::alignment;
 pub use crate::core::animation;
+pub use crate::core::automation;
 pub use crate::core::border;
 pub use crate::core::color;
 pub use crate::core::gradient;
