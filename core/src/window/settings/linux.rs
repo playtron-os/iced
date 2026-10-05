@@ -26,12 +26,13 @@ pub struct PlatformSpecific {
     /// Ignored on X11 and on compositors without `zxdg_importer_v2`.
     pub wayland_parent: Option<String>,
 
-    /// Wayland-only: let Kora's Halo header float over the window's top edge
-    /// instead of reserving room above it (`kora_halo_header_manager_v1`,
-    /// overlay mode).
+    /// Wayland-only: give Kora's Halo a drag strip over the window's top edge
+    /// (`kora_halo_header_manager_v1`, overlay mode). The Halo itself always
+    /// floats above the window, outside its geometry; without this nothing of
+    /// it reaches into the window.
     ///
     /// For a window laid out chromeless — full-bleed content whose first row
-    /// already sits clear of the Halo's hot zone. The mode is sent before the
+    /// already sits clear of the strip. The mode is sent before the
     /// window's initial commit, the only time the protocol takes it. Ignored
     /// on X11 and on compositors without the global; ask
     /// `window::is_halo_header_overlay` which one the window got.
