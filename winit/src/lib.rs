@@ -926,6 +926,7 @@ async fn run_instance<P>(
     P: Program + 'static,
     P::Theme: theme::Base,
 {
+    #[cfg(feature = "hinting")]
     use crate::core::Renderer as _;
     use winit::event;
     use winit::event_loop::ControlFlow;
@@ -2788,6 +2789,39 @@ fn run_action<'a, P, C>(
                     let _ = channel.send(window.raw.is_maximized());
                 }
             }
+            window::Action::GetIdentity(id, channel) => {
+                let identity = window_manager.get_mut(id).and_then(|window| {
+                    #[cfg(all(
+                        feature = "wayland",
+                        any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        )
+                    ))]
+                    {
+                        use winit::platform::wayland::WindowExtWayland;
+                        window.raw.kora_identity().map(conversion::window_identity)
+                    }
+                    #[cfg(not(all(
+                        feature = "wayland",
+                        any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        )
+                    )))]
+                    {
+                        let _ = window;
+                        None
+                    }
+                });
+                let _ = channel.send(identity);
+            }
             window::Action::Maximize(id, maximized) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.set_maximized(maximized);
@@ -3631,6 +3665,7 @@ where
     C: Compositor<Renderer = P::Renderer>,
     P::Theme: theme::Base,
 {
+    #[cfg(feature = "hinting")]
     use crate::core::Renderer as _;
 
     for (id, window) in window_manager.iter_mut() {
@@ -3815,7 +3850,7 @@ fn resolve_dnd_icon_elements<P, C>(
                         &icon_viewport,
                         core::Color::TRANSPARENT,
                     );
-                    for pix in bytes.chunks_exact_mut(4) {
+                    for pix in bytes.as_chunks_mut::<4>().0 {
                         // RGBA → ARGB (little-endian pre-multiplied)
                         pix.swap(0, 2);
                     }

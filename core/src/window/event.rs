@@ -22,6 +22,13 @@ pub enum Event {
     /// A window was closed.
     Closed,
 
+    /// The complete compositor-authenticated identity changed or was revoked.
+    ///
+    /// `None` clears any cached attribution. Applications should also clear
+    /// attribution on [`Self::Closed`]. Only supported Kora Wayland compositors
+    /// produce this event; other platforms have no identity.
+    IdentityChanged(Option<super::Identity>),
+
     /// A window was moved.
     Moved(Point),
 

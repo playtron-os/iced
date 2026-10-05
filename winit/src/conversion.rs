@@ -318,7 +318,18 @@ pub fn window_event(
         WindowEvent::SpecialAction(action) => {
             Some(Event::SpecialAction(special_action_event(action)))
         }
+        WindowEvent::IdentityChanged(identity) => Some(Event::Window(
+            window::Event::IdentityChanged(identity.map(window_identity)),
+        )),
         _ => None,
+    }
+}
+
+/// Converts the complete authenticated pair without inventing attribution.
+pub fn window_identity(identity: winit::window::Identity) -> window::Identity {
+    window::Identity {
+        identifier: identity.identifier,
+        workspace: identity.workspace,
     }
 }
 
@@ -1198,6 +1209,38 @@ fn dnd_window_event(event: winit::event::DndWindowEvent) -> crate::core::dnd::Ev
         DndWindowEvent::SourceFinished => DndEvent::SourceEvent(SourceEvent::Finished),
         DndWindowEvent::SourceAction(bits) => {
             DndEvent::SourceEvent(SourceEvent::Action(DndAction::from_bits_truncate(bits)))
+        }
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn window_identity_events_preserve_machine_workspace_and_revocation() {
+        for (identity, expected) in [
+            (
+                Some(winit::window::Identity {
+                    identifier: "mapped-window".into(),
+                    workspace: String::new(),
+                }),
+                Some(window::Identity {
+                    identifier: "mapped-window".into(),
+                    workspace: String::new(),
+                }),
+            ),
+            (None, None),
+        ] {
+            let converted = window_event(
+                winit::event::WindowEvent::IdentityChanged(identity),
+                1.0,
+                winit::keyboard::ModifiersState::empty(),
+            );
+            assert_eq!(
+                converted,
+                Some(Event::Window(window::Event::IdentityChanged(expected))),
+            );
         }
     }
 }
