@@ -48,6 +48,11 @@ pub trait Layer: Default {
     /// clipping override this to round the clip to the given `radius` (in the
     /// layer's own physical-pixel space). The default is a no-op.
     fn set_clip_radius(&mut self, _radius: crate::core::border::Radius) {}
+
+    /// Returns this layer's rounded clip, when the backend supports one.
+    fn clip_radius(&self) -> Option<crate::core::border::Radius> {
+        None
+    }
 }
 
 /// A stack of layers used for drawing.
@@ -58,6 +63,7 @@ pub struct Stack<T: Layer> {
     previous: Vec<usize>,
     current: usize,
     active_count: usize,
+    split_on_pop: bool,
 }
 
 impl<T: Layer> Stack<T> {
@@ -69,6 +75,7 @@ impl<T: Layer> Stack<T> {
             previous: vec![],
             current: 0,
             active_count: 1,
+            split_on_pop: false,
         }
     }
 
@@ -120,6 +127,9 @@ impl<T: Layer> Stack<T> {
         self.flush();
 
         self.current = self.previous.pop().unwrap();
+        if self.split_on_pop {
+            self.split();
+        }
     }
 
     /// Pushes a new [`Transformation`] in the [`Stack`].
@@ -156,6 +166,24 @@ impl<T: Layer> Stack<T> {
     /// Flushes and settles any primitives in the [`Stack`].
     pub fn flush(&mut self) {
         self.layers[self.current].flush();
+    }
+
+    /// Continues in a fresh layer and preserves order when enclosing clips resume.
+    pub fn split(&mut self) {
+        self.flush();
+        let bounds = self.layers[self.current].bounds();
+        let radius = self.layers[self.current].clip_radius();
+        self.current = self.active_count;
+        self.active_count += 1;
+        if self.current == self.layers.len() {
+            self.layers.push(T::with_bounds(bounds));
+        } else {
+            self.layers[self.current].resize(bounds);
+        }
+        if let Some(radius) = radius {
+            self.layers[self.current].set_clip_radius(radius);
+        }
+        self.split_on_pop = true;
     }
 
     /// Performs layer merging wherever possible.
@@ -232,6 +260,7 @@ impl<T: Layer> Stack<T> {
         self.current = 0;
         self.active_count = 1;
         self.previous.clear();
+        self.split_on_pop = false;
     }
 }
 
