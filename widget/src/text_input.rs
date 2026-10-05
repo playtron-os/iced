@@ -33,6 +33,9 @@
 mod editor;
 mod value;
 
+#[cfg(all(test, debug_assertions))]
+mod tests;
+
 pub mod cursor;
 
 pub use cursor::Cursor;
@@ -117,6 +120,7 @@ where
     on_focus: Option<Message>,
     on_unfocus: Option<Message>,
     on_escape: Option<Message>,
+    navigate_on_boundary: bool,
     icon: Option<Icon<Renderer::Font>>,
     class: Theme::Class<'a>,
     last_status: Option<Status>,
@@ -154,6 +158,7 @@ where
             on_focus: None,
             on_unfocus: None,
             on_escape: None,
+            navigate_on_boundary: false,
             icon: None,
             class: Theme::default(),
             last_status: None,
@@ -224,6 +229,14 @@ where
     #[must_use]
     pub fn on_press_maybe(mut self, on_press: Option<Message>) -> Self {
         self.on_press = on_press;
+        self
+    }
+
+    /// Lets unmodified Left/Right arrows reach spatial navigation when the
+    /// caret is already at the corresponding text boundary. Disabled by default.
+    #[must_use]
+    pub fn navigate_on_boundary(mut self, enabled: bool) -> Self {
+        self.navigate_on_boundary = enabled;
         self
     }
 
@@ -1341,6 +1354,12 @@ where
                             shell.capture_event();
                         }
                         keyboard::Key::Named(key::Named::ArrowLeft) => {
+                            let leave = self.navigate_on_boundary
+                                && modifiers.is_empty()
+                                && matches!(
+                                    state.cursor.state(&self.value),
+                                    cursor::State::Index(0)
+                                );
                             let cursor_before = state.cursor;
 
                             if (self.is_secure && modifiers.jump()) || modifiers.macos_command() {
@@ -1369,9 +1388,14 @@ where
                                 shell.request_redraw();
                             }
 
-                            shell.capture_event();
+                            if !leave {
+                                shell.capture_event();
+                            }
                         }
                         keyboard::Key::Named(key::Named::ArrowRight) => {
+                            let leave = self.navigate_on_boundary
+                                && modifiers.is_empty()
+                                && matches!(state.cursor.state(&self.value), cursor::State::Index(i) if i == self.value.len());
                             let cursor_before = state.cursor;
 
                             if (self.is_secure && modifiers.jump()) || modifiers.macos_command() {
@@ -1401,7 +1425,9 @@ where
                                 shell.request_redraw();
                             }
 
-                            shell.capture_event();
+                            if !leave {
+                                shell.capture_event();
+                            }
                         }
                         keyboard::Key::Named(key::Named::Escape) => {
                             // Fire on_escape callback BEFORE unfocusing (so it runs before on_unfocus)
