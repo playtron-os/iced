@@ -2789,6 +2789,70 @@ fn run_action<'a, P, C>(
                     let _ = channel.send(window.raw.is_maximized());
                 }
             }
+            window::Action::SetAppCommands(id, commands) => {
+                if let Some(window) = window_manager.get_mut(id) {
+                    #[cfg(all(
+                        feature = "wayland",
+                        any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        )
+                    ))]
+                    {
+                        use winit::platform::wayland::WindowExtWayland;
+                        window
+                            .raw
+                            .set_app_commands(&conversion::app_commands(commands));
+                    }
+                    #[cfg(not(all(
+                        feature = "wayland",
+                        any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        )
+                    )))]
+                    {
+                        let _ = (window, commands);
+                    }
+                }
+            }
+            window::Action::RequestAppPalette(id) => {
+                if let Some(window) = window_manager.get_mut(id) {
+                    #[cfg(all(
+                        feature = "wayland",
+                        any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        )
+                    ))]
+                    {
+                        use winit::platform::wayland::WindowExtWayland;
+                        window.raw.request_app_palette();
+                    }
+                    #[cfg(not(all(
+                        feature = "wayland",
+                        any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        )
+                    )))]
+                    {
+                        let _ = window;
+                    }
+                }
+            }
             window::Action::GetIdentity(id, channel) => {
                 let identity = window_manager.get_mut(id).and_then(|window| {
                     #[cfg(all(

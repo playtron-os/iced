@@ -321,7 +321,50 @@ pub fn window_event(
         WindowEvent::IdentityChanged(identity) => Some(Event::Window(
             window::Event::IdentityChanged(identity.map(window_identity)),
         )),
+        WindowEvent::AppCommand(request) => {
+            Some(Event::Window(window::Event::AppCommand(match request {
+                winit::window::AppCommandRequest::Invoke(id) => {
+                    window::AppCommandRequest::Invoke(id)
+                }
+                winit::window::AppCommandRequest::OpenRecent(id) => {
+                    window::AppCommandRequest::OpenRecent(id)
+                }
+            })))
+        }
         _ => None,
+    }
+}
+
+/// Converts a window's published commands to [`winit`]'s shape.
+pub fn app_commands(commands: window::AppCommands) -> winit::window::AppCommands {
+    winit::window::AppCommands {
+        handles: commands.handles,
+        commands: commands
+            .commands
+            .into_iter()
+            .map(|command| winit::window::AppCommand {
+                id: command.id,
+                name: command.name,
+                keys: command.keys,
+                section: command.section,
+                icon: command.icon,
+                menu: command.menu,
+                stateful: command.stateful,
+                bound: command.bound,
+                enabled: command.enabled,
+                active: command.active,
+            })
+            .collect(),
+        recents: commands
+            .recents
+            .into_iter()
+            .map(|recent| winit::window::AppRecent {
+                id: recent.id,
+                label: recent.label,
+                sublabel: recent.sublabel,
+                timestamp_ms: recent.timestamp_ms,
+            })
+            .collect(),
     }
 }
 
@@ -1242,5 +1285,73 @@ mod identity_tests {
                 Some(Event::Window(window::Event::IdentityChanged(expected))),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod app_command_tests {
+    use super::*;
+
+    #[test]
+    fn a_shell_request_reaches_the_window_as_its_own_event() {
+        for (request, expected) in [
+            (
+                winit::window::AppCommandRequest::Invoke("slate.zoom-in".into()),
+                window::AppCommandRequest::Invoke("slate.zoom-in".into()),
+            ),
+            (
+                winit::window::AppCommandRequest::OpenRecent("doc".into()),
+                window::AppCommandRequest::OpenRecent("doc".into()),
+            ),
+        ] {
+            assert_eq!(
+                window_event(
+                    winit::event::WindowEvent::AppCommand(request),
+                    1.0,
+                    winit::keyboard::ModifiersState::empty(),
+                ),
+                Some(Event::Window(window::Event::AppCommand(expected))),
+            );
+        }
+    }
+
+    #[test]
+    fn a_catalog_crosses_to_winit_unchanged() {
+        let catalog = window::AppCommands {
+            handles: vec![("copy".into(), true), ("settings".into(), false)],
+            commands: vec![window::AppCommand {
+                id: "slate.zoom-in".into(),
+                name: "Zoom in".into(),
+                keys: "Ctrl+=".into(),
+                section: "View".into(),
+                icon: "zoom-in".into(),
+                menu: true,
+                stateful: true,
+                bound: true,
+                enabled: false,
+                active: true,
+            }],
+            recents: vec![window::AppRecent {
+                id: "doc".into(),
+                label: "Rooftop fight".into(),
+                sublabel: "Shots".into(),
+                timestamp_ms: 1 << 40,
+            }],
+        };
+        let converted = app_commands(catalog.clone());
+        assert_eq!(converted.handles, catalog.handles);
+        let command = &converted.commands[0];
+        assert_eq!(
+            (
+                command.id.as_str(),
+                command.keys.as_str(),
+                command.section.as_str()
+            ),
+            ("slate.zoom-in", "Ctrl+=", "View")
+        );
+        assert!(command.menu && command.stateful && command.bound && command.active);
+        assert!(!command.enabled);
+        assert_eq!(converted.recents[0].timestamp_ms, 1 << 40);
+        assert_eq!(converted.recents[0].sublabel, "Shots");
     }
 }
