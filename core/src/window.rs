@@ -23,3 +23,15 @@ pub use redraw_request::RedrawRequest;
 pub use screenshot::Screenshot;
 pub use settings::Settings;
 pub use user_attention::UserAttention;
+
+/// A compositor-authenticated identity for one mapped window lifetime.
+///
+/// Available on Kora Wayland compositors. Visibility changes preserve the pair;
+/// a true client unmap revokes it and a later mapping gets a new identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Identity {
+    /// The identifier shared with the compositor's foreign window list.
+    pub identifier: String,
+    /// The authenticated process workspace. Empty means the machine plane.
+    pub workspace: String,
+}

@@ -1,7 +1,7 @@
 //! Build window-based GUI applications.
 use crate::core::time::Instant;
 use crate::core::window::{
-    Direction, Event, Icon, Id, Level, Mode, Screenshot, Settings, UserAttention,
+    Direction, Event, Icon, Id, Identity, Level, Mode, Screenshot, Settings, UserAttention,
 };
 use crate::core::{Point, Size};
 use crate::futures::Subscription;
@@ -91,6 +91,9 @@ pub enum Action {
 
     /// Get the current logical dimensions of the window.
     GetSize(Id, oneshot::Sender<Size>),
+
+    /// Gets the complete compositor-authenticated identity, if available.
+    GetIdentity(Id, oneshot::Sender<Option<Identity>>),
 
     /// Get if the current window is maximized or not.
     GetMaximized(Id, oneshot::Sender<bool>),
@@ -384,6 +387,16 @@ pub fn unregister_special_action<T>(id: Id) -> Task<T> {
 /// - **Other platforms:** Always `false`.
 pub fn is_halo_header_overlay(id: Id) -> Task<bool> {
     task::oneshot(move |channel| crate::Action::Window(Action::GetHaloHeaderOverlay(id, channel)))
+}
+
+/// Gets the complete compositor-authenticated identity for this window.
+///
+/// Returns `None` before it arrives, after revocation, for a closed window, or
+/// on an unsupported platform. An empty workspace in an existing identity
+/// explicitly means the machine plane. Subscribe to [`Event::IdentityChanged`]
+/// and [`Event::Closed`] to invalidate cached attribution.
+pub fn get_identity(id: Id) -> Task<Option<Identity>> {
+    task::oneshot(move |channel| crate::Action::Window(Action::GetIdentity(id, channel)))
 }
 
 /// Opens a new window with the given [`Settings`]; producing the [`Id`]
