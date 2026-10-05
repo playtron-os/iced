@@ -29,6 +29,12 @@ pub enum Event {
     /// produce this event; other platforms have no identity.
     IdentityChanged(Option<super::Identity>),
 
+    /// The shell asked the window to run one of the commands it published
+    /// with [`set_app_commands`](../../iced_runtime/window/fn.set_app_commands.html).
+    ///
+    /// Only Kora Wayland compositors produce this event.
+    AppCommand(super::AppCommandRequest),
+
     /// A window was moved.
     Moved(Point),
 

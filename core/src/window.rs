@@ -3,6 +3,7 @@ pub mod icon;
 pub mod screenshot;
 pub mod settings;
 
+mod app_commands;
 mod direction;
 mod event;
 mod id;
@@ -12,6 +13,7 @@ mod position;
 mod redraw_request;
 mod user_attention;
 
+pub use app_commands::{AppCommand, AppCommandRequest, AppCommands, AppRecent};
 pub use direction::Direction;
 pub use event::Event;
 pub use icon::Icon;

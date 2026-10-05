@@ -1,7 +1,8 @@
 //! Build window-based GUI applications.
 use crate::core::time::Instant;
 use crate::core::window::{
-    Direction, Event, Icon, Id, Identity, Level, Mode, Screenshot, Settings, UserAttention,
+    AppCommands, Direction, Event, Icon, Id, Identity, Level, Mode, Screenshot, Settings,
+    UserAttention,
 };
 use crate::core::{Point, Size};
 use crate::futures::Subscription;
@@ -266,6 +267,12 @@ pub enum Action {
 
     /// Get whether Kora's Halo has a drag strip over the window's top edge.
     GetHaloHeaderOverlay(Id, oneshot::Sender<bool>),
+
+    /// Publish the window's commands to the shell, replacing what it published.
+    SetAppCommands(Id, AppCommands),
+
+    /// Ask the shell for the window's command palette.
+    RequestAppPalette(Id),
 }
 
 /// A window managed by iced.
@@ -397,6 +404,30 @@ pub fn is_halo_header_overlay(id: Id) -> Task<bool> {
 /// and [`Event::Closed`] to invalidate cached attribution.
 pub fn get_identity(id: Id) -> Task<Option<Identity>> {
     task::oneshot(move |channel| crate::Action::Window(Action::GetIdentity(id, channel)))
+}
+
+/// Publishes the window's commands and recent items to the shell, replacing
+/// what it published before.
+///
+/// The shell lists them in its own menus and palette, and sends
+/// [`Event::AppCommand`] back when one is picked. Publish again whenever the
+/// set, a command's availability or the recent items change.
+///
+/// ## Platform-specific
+/// - **Kora/Wayland:** Uses the `kora_app_commands_v1` protocol.
+/// - **Other platforms:** No effect.
+pub fn set_app_commands<T>(id: Id, commands: AppCommands) -> Task<T> {
+    task::effect(crate::Action::Window(Action::SetAppCommands(id, commands)))
+}
+
+/// Asks the shell to open its command palette for the window, as the window's
+/// own shortcut for it. Ignored unless the window has keyboard focus.
+///
+/// ## Platform-specific
+/// - **Kora/Wayland:** Uses the `kora_app_commands_v1` protocol.
+/// - **Other platforms:** No effect.
+pub fn request_app_palette<T>(id: Id) -> Task<T> {
+    task::effect(crate::Action::Window(Action::RequestAppPalette(id)))
 }
 
 /// Opens a new window with the given [`Settings`]; producing the [`Id`]
