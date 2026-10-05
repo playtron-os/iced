@@ -2,6 +2,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 pub mod window;
 
+mod backdrop;
 mod engine;
 mod layer;
 mod primitive;
@@ -48,6 +49,8 @@ pub struct Renderer {
     engine: Engine, // TODO: Shared engine
     /// Stack of opacity values for nested opacity groups
     opacity_stack: Vec<f32>,
+    pending_backdrop: bool,
+    backdrop_layers: Vec<bool>,
 }
 
 impl Renderer {
@@ -58,12 +61,18 @@ impl Renderer {
             layers: layer::Stack::new(),
             engine: Engine::new(),
             opacity_stack: vec![1.0],
+            pending_backdrop: false,
+            backdrop_layers: Vec::new(),
         }
     }
 
     /// Returns the current opacity value (product of all nested opacity values)
     fn current_opacity(&self) -> f32 {
         *self.opacity_stack.last().unwrap_or(&1.0)
+    }
+
+    fn split_layer(&mut self) {
+        self.layers.split();
     }
 
     pub fn layers(&mut self) -> &[Layer] {
@@ -82,6 +91,13 @@ impl Renderer {
         let scale_factor = viewport.scale_factor();
         self.layers.flush();
 
+        // A partial redraw can sample last frame's foreground through the blur.
+        let full = [Rectangle::with_size(viewport.logical_size())];
+        let damage = if self.layers.iter().any(|layer| layer.backdrop.is_some()) {
+            &full[..]
+        } else {
+            damage
+        };
         for &damage_bounds in damage {
             let damage_bounds = damage_bounds * scale_factor;
 
@@ -127,6 +143,17 @@ impl Renderer {
                     );
                 } else {
                     engine::adjust_clip_mask(clip_mask, layer_bounds);
+                }
+
+                if let Some((filter, opacity)) = &layer.backdrop {
+                    backdrop::draw(
+                        pixels,
+                        filter,
+                        *opacity,
+                        scale_factor,
+                        layer_bounds,
+                        clip_mask,
+                    );
                 }
 
                 if !layer.quads.is_empty() {
@@ -259,6 +286,33 @@ fn apply_opacity(
 }
 
 impl core::Renderer for Renderer {
+    fn draw_backdrop_filter(&mut self, mut filter: renderer::BackdropFilter) {
+        if !filter.software || self.current_opacity() <= 0.0 {
+            return;
+        }
+        let transformation = self.layers.transformation();
+        let scale = transformation.scale_factor();
+        filter.bounds = filter.bounds * transformation;
+        filter.radius *= scale;
+        filter.border_radius = filter.border_radius.map(|radius| radius * scale);
+        let opacity = self.current_opacity();
+        self.split_layer();
+        self.layers.current_mut().0.backdrop = Some((filter, opacity));
+        self.split_layer();
+        self.pending_backdrop = true;
+    }
+
+    fn start_post_blur_layer(&mut self, _bounds: Rectangle) {
+        let active = std::mem::take(&mut self.pending_backdrop);
+        self.backdrop_layers.push(active);
+    }
+
+    fn end_post_blur_layer(&mut self) {
+        if self.backdrop_layers.pop().unwrap_or(false) {
+            self.split_layer();
+        }
+    }
+
     fn start_layer(&mut self, bounds: Rectangle) {
         self.layers.push_clip(bounds);
     }
@@ -342,6 +396,8 @@ impl core::Renderer for Renderer {
         self.layers.reset(new_bounds);
         self.opacity_stack.clear();
         self.opacity_stack.push(1.0);
+        self.pending_backdrop = false;
+        self.backdrop_layers.clear();
     }
 }
 
