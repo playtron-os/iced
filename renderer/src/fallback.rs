@@ -171,6 +171,10 @@ where
         );
     }
 
+    fn draw_backdrop_filter(&mut self, filter: core::renderer::BackdropFilter) {
+        delegate!(self, renderer, renderer.draw_backdrop_filter(filter));
+    }
+
     fn has_post_blur_content(&self) -> bool {
         delegate!(self, renderer, renderer.has_post_blur_content())
     }

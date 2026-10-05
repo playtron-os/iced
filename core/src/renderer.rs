@@ -12,6 +12,27 @@ use crate::{
 /// pixel grid.
 pub const CRISP: bool = cfg!(feature = "crisp");
 
+/// A backdrop filter and its software-rendering policy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackdropFilter {
+    /// The region to filter, in logical coordinates.
+    pub bounds: Rectangle,
+    /// Gaussian standard deviation in logical pixels.
+    pub radius: f32,
+    /// Top-left, top-right, bottom-right, and bottom-left corner radii.
+    pub border_radius: [f32; 4],
+    /// The edge encoding used by directional backdrop fades.
+    pub fade_direction: u8,
+    /// Where the filter starts fading, as a fraction of the region.
+    pub fade_start: f32,
+    /// Where the filter finishes fading.
+    pub fade_end: f32,
+    /// CSS saturation; one leaves colors unchanged.
+    pub saturation: f32,
+    /// Whether a software renderer may perform this filter.
+    pub software: bool,
+}
+
 /// A component that can be used by widgets to draw themselves on a screen.
 pub trait Renderer {
     /// Starts recording a new layer.
@@ -192,6 +213,19 @@ pub trait Renderer {
             border_radius,
             compatible_fade_start,
             saturation,
+        );
+    }
+
+    /// Draws a backdrop filter, optionally allowing the software rendering cost.
+    fn draw_backdrop_filter(&mut self, filter: BackdropFilter) {
+        self.draw_backdrop_blur_with_fade(
+            filter.bounds,
+            filter.radius,
+            filter.border_radius,
+            filter.fade_direction,
+            filter.fade_start,
+            filter.fade_end,
+            filter.saturation,
         );
     }
 

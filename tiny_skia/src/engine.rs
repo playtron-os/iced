@@ -685,7 +685,7 @@ fn stroke_dash(border: &crate::core::Border) -> Option<tiny_skia::StrokeDash> {
     tiny_skia::StrokeDash::new(vec![dash.on, dash.off], 0.0)
 }
 
-fn rounded_rectangle(bounds: Rectangle, border_radius: [f32; 4]) -> tiny_skia::Path {
+pub(crate) fn rounded_rectangle(bounds: Rectangle, border_radius: [f32; 4]) -> tiny_skia::Path {
     let [top_left, top_right, bottom_right, bottom_left] = border_radius;
 
     if top_left == 0.0 && top_right == 0.0 && bottom_right == 0.0 && bottom_left == 0.0 {

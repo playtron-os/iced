@@ -21,6 +21,8 @@
 //! - The blur effect is applied to content that was rendered BEFORE the blur widget
 //! - Content inside the blur widget is rendered on top of the blurred background
 //! - Larger blur radii are more expensive to render
+//! - Software renderers require `.software(true)`; enabling it redraws the scene
+//!   before filtering, including during partial updates
 
 use crate::core::layout::{self, Layout};
 use crate::core::mouse;
@@ -64,6 +66,7 @@ pub struct BackdropBlur<'a, Message, Theme = crate::Theme, Renderer = crate::Ren
     /// CSS `saturate()` amount applied to the blurred backdrop.
     /// 1.0 = unchanged (default).
     saturation: f32,
+    software: bool,
     width: Length,
     height: Length,
 }
@@ -81,9 +84,18 @@ impl<'a, Message, Theme, Renderer> BackdropBlur<'a, Message, Theme, Renderer> {
             fade_start: 1.0,
             fade_end: 1.0,
             saturation: 1.0,
+            software: false,
             width: Length::Shrink,
             height: Length::Shrink,
         }
+    }
+
+    /// Enables filtering on software renderers, where blur has a CPU cost.
+    /// Disabled by default; GPU rendering is unaffected.
+    #[must_use]
+    pub fn software(mut self, enabled: bool) -> Self {
+        self.software = enabled;
+        self
     }
 
     /// Sets the CSS `saturate()` amount applied to the blurred backdrop.
@@ -289,11 +301,11 @@ where
         if filters {
             // Draw the backdrop blur effect at this location
             // This blurs whatever was rendered before this widget
-            renderer.draw_backdrop_blur_with_fade(
+            renderer.draw_backdrop_filter(renderer::BackdropFilter {
                 bounds,
-                self.blur_radius,
-                self.border_radius,
-                match self.fade_edge {
+                radius: self.blur_radius,
+                border_radius: self.border_radius,
+                fade_direction: match self.fade_edge {
                     FadeEdge::Bottom => 0,
                     FadeEdge::Top => 1,
                     FadeEdge::Right => 2,
@@ -301,10 +313,11 @@ where
                     FadeEdge::Vertical => 4,
                     FadeEdge::Horizontal => 5,
                 },
-                self.fade_start,
-                self.fade_end,
-                self.saturation,
-            );
+                fade_start: self.fade_start,
+                fade_end: self.fade_end,
+                saturation: self.saturation,
+                software: self.software,
+            });
 
             // Draw the content in a post-blur layer so it appears ON TOP of the blur
             // This ensures the blur widget's children are rendered after the blur effect is applied

@@ -15,6 +15,7 @@ pub struct Layer {
     pub bounds: Rectangle,
     /// When `Some`, the clip is rounded by these per-corner radii (in physical pixels).
     pub bounds_radius: Option<core::border::Radius>,
+    pub backdrop: Option<(core::renderer::BackdropFilter, f32)>,
     pub quads: Vec<(Quad, Background)>,
     pub primitives: Vec<Item<Primitive>>,
     pub images: Vec<Image>,
@@ -299,6 +300,18 @@ impl Layer {
         damage.extend(text);
         damage.extend(primitives);
         damage.extend(images);
+        if previous.backdrop != current.backdrop
+            || ((previous.backdrop.is_some() || current.backdrop.is_some())
+                && previous.bounds_radius != current.bounds_radius)
+        {
+            damage.extend(
+                previous
+                    .backdrop
+                    .iter()
+                    .chain(current.backdrop.iter())
+                    .map(|(filter, _)| filter.bounds.expand(1.0)),
+            );
+        }
         damage
     }
 }
@@ -308,6 +321,7 @@ impl Default for Layer {
         Self {
             bounds: Rectangle::INFINITE,
             bounds_radius: None,
+            backdrop: None,
             quads: Vec::new(),
             primitives: Vec::new(),
             text: Vec::new(),
@@ -339,6 +353,7 @@ impl graphics::Layer for Layer {
         self.bounds = Rectangle::INFINITE;
         self.bounds_radius = None;
 
+        self.backdrop = None;
         self.quads.clear();
         self.primitives.clear();
         self.text.clear();
@@ -349,7 +364,14 @@ impl graphics::Layer for Layer {
         self.bounds_radius = Some(radius);
     }
 
+    fn clip_radius(&self) -> Option<core::border::Radius> {
+        self.bounds_radius
+    }
+
     fn start(&self) -> usize {
+        if self.backdrop.is_some() {
+            return 0;
+        }
         if !self.quads.is_empty() {
             return 1;
         }
@@ -370,6 +392,9 @@ impl graphics::Layer for Layer {
     }
 
     fn end(&self) -> usize {
+        if self.backdrop.is_some() {
+            return usize::MAX;
+        }
         if !self.text.is_empty() {
             return 4;
         }
