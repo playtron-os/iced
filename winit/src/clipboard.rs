@@ -218,7 +218,7 @@ mod platform {
                 )))]
                 let result = {
                     let _ = (&mut clipboard, text);
-                    Err(Error::ClipboardNotSupported)
+                    Err(Error::ClipboardUnavailable)
                 };
 
                 callback(result);
