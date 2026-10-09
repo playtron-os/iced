@@ -254,13 +254,15 @@ impl Engine {
                     &border_paint,
                     &tiny_skia::Stroke {
                         width: border_width,
-                        dash: stroke_dash(&quad.border),
+                        dash: stroke_dash(&quad.border, quad.bounds.size(), border_width),
                         ..tiny_skia::Stroke::default()
                     },
                     transform,
                     clip_mask,
                 );
-            } else if all_equal && let Some(dash) = stroke_dash(&quad.border) {
+            } else if all_equal
+                && let Some(dash) = stroke_dash(&quad.border, quad.bounds.size(), border_width)
+            {
                 // A dash has to follow a stroke: square its tight corners and
                 // trim them to the rounded outline.
                 let outline = match clip_mask {
@@ -710,9 +712,14 @@ fn snap_border_width(width: f32, scale: f32) -> f32 {
     }
 }
 
-/// The border's dash pattern as a stroke dash, when it has one.
-fn stroke_dash(border: &crate::core::Border) -> Option<tiny_skia::StrokeDash> {
-    let dash = border.dash?;
+/// The border's dash pattern as a stroke dash, when it has one, fitted round
+/// the centre line of a `width` border on a box of `size`.
+fn stroke_dash(
+    border: &crate::core::Border,
+    size: Size,
+    width: f32,
+) -> Option<tiny_skia::StrokeDash> {
+    let dash = border.dash?.around(size, border.radius.into(), width);
     tiny_skia::StrokeDash::new(vec![dash.on, dash.off], 0.0)
 }
 

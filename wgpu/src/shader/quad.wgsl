@@ -232,9 +232,12 @@ fn layer_clip_alpha(frag_pos: vec2<f32>) -> f32 {
 
 // How far along a rounded rectangle's outline a fragment sits, clockwise from
 // the end of the top-left corner. `p` is the fragment relative to the top-left
-// of a `size` box; `radius` is per-corner [tl, tr, br, bl].
-fn outline_position(p: vec2<f32>, size: vec2<f32>, radius: vec4<f32>) -> f32 {
+// of a `size` box; `radius` is per-corner [tl, tr, br, bl]. Corners are
+// measured `inset` inside the outline, on a border's centre line, where the
+// browser strokes a dash.
+fn outline_position(p: vec2<f32>, size: vec2<f32>, radius: vec4<f32>, inset: f32) -> f32 {
     let quarter = 1.5707963;
+    let arc = max(radius - vec4(inset), vec4(0.0)) * quarter;
     let top = size.x - radius.x - radius.y;
     let right = size.y - radius.y - radius.z;
     let bottom = size.x - radius.z - radius.w;
@@ -245,22 +248,22 @@ fn outline_position(p: vec2<f32>, size: vec2<f32>, radius: vec4<f32>) -> f32 {
         var a = atan2(p.y - radius.x, p.x - radius.x);
         if a < 0.0 { a = a + 6.2831853; }
         let t = clamp((a - 3.1415927) / quarter, 0.0, 1.0);
-        return top + radius.y * quarter + right + radius.z * quarter + bottom + radius.w * quarter + left + t * radius.x * quarter;
+        return top + arc.y + right + arc.z + bottom + arc.w + left + t * arc.x;
     }
     if p.x > size.x - radius.y && p.y < radius.y {
         let a = atan2(p.y - radius.y, p.x - (size.x - radius.y));
         let t = clamp((a + quarter) / quarter, 0.0, 1.0);
-        return top + t * radius.y * quarter;
+        return top + t * arc.y;
     }
     if p.x > size.x - radius.z && p.y > size.y - radius.z {
         let a = atan2(p.y - (size.y - radius.z), p.x - (size.x - radius.z));
         let t = clamp(a / quarter, 0.0, 1.0);
-        return top + radius.y * quarter + right + t * radius.z * quarter;
+        return top + arc.y + right + t * arc.z;
     }
     if p.x < radius.w && p.y > size.y - radius.w {
         let a = atan2(p.y - (size.y - radius.w), p.x - radius.w);
         let t = clamp((a - quarter) / quarter, 0.0, 1.0);
-        return top + radius.y * quarter + right + radius.z * quarter + bottom + t * radius.w * quarter;
+        return top + arc.y + right + arc.z + bottom + t * arc.w;
     }
 
     // Otherwise the nearest straight edge.
@@ -270,22 +273,22 @@ fn outline_position(p: vec2<f32>, size: vec2<f32>, radius: vec4<f32>) -> f32 {
         return p.x - radius.x;
     }
     if nearest == d.y {
-        return top + radius.y * quarter + (p.y - radius.y);
+        return top + arc.y + (p.y - radius.y);
     }
     if nearest == d.z {
-        return top + radius.y * quarter + right + radius.z * quarter + (size.x - radius.z - p.x);
+        return top + arc.y + right + arc.z + (size.x - radius.z - p.x);
     }
-    return top + radius.y * quarter + right + radius.z * quarter + bottom + radius.w * quarter + (size.y - radius.w - p.y);
+    return top + arc.y + right + arc.z + bottom + arc.w + (size.y - radius.w - p.y);
 }
 
 // Coverage of a dashed border at `frag_pos`: 1 on a dash, 0 in a gap, with a
 // one-pixel ramp between. A zero pattern is solid.
-fn dash_coverage(frag_pos: vec2<f32>, pos: vec2<f32>, size: vec2<f32>, radius: vec4<f32>, dash: vec2<f32>) -> f32 {
+fn dash_coverage(frag_pos: vec2<f32>, pos: vec2<f32>, size: vec2<f32>, radius: vec4<f32>, dash: vec2<f32>, inset: f32) -> f32 {
     let period = dash.x + dash.y;
     if dash.x <= 0.0 || period <= 0.0 {
         return 1.0;
     }
-    let s = outline_position(frag_pos - pos, size, radius);
+    let s = outline_position(frag_pos - pos, size, radius, inset);
     let u = s - floor(s / period) * period;
     return clamp(min(u, dash.x - u) + 0.5, 0.0, 1.0);
 }

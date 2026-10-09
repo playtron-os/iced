@@ -413,7 +413,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
         // outer_alpha = 1, inner_alpha = 0 → border_alpha = 1
         // outer_alpha = 1, inner_alpha = 1 → border_alpha = 0 (interior - hidden)
         let border_alpha = outer_alpha * (1.0 - inner_alpha)
-            * dash_coverage(input.position.xy, pos, scale, input.border_radius, border_dash);
+            * dash_coverage(input.position.xy, pos, scale, input.border_radius, border_dash, border_width / 2.0);
         
         return mixed_color * border_alpha * clip_a;
     }
@@ -440,7 +440,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
             mixed_color,
             border_color,
             clamp(0.5 + dist + border_width, 0.0, 1.0)
-                * dash_coverage(input.position.xy, pos, scale, input.border_radius, border_dash)
+                * dash_coverage(input.position.xy, pos, scale, input.border_radius, border_dash, border_width / 2.0)
         );
     }
 

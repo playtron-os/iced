@@ -531,6 +531,8 @@ fn to_gpu_quad(quad: renderer::Quad, transformation: Transformation) -> Quad {
         snap: quad.snap as u32,
         border_only: quad.border_only as u32,
         border_dash: quad.border.dash.map_or([0.0; 2], |dash| {
+            let width = quad.border.widths().into_iter().fold(0.0, f32::max);
+            let dash = dash.around(quad.bounds.size(), quad.border.radius.into(), width);
             let s = transformation.scale_factor();
             [dash.on * s, dash.off * s]
         }),
