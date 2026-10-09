@@ -353,10 +353,10 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     let clip_a = layer_clip_alpha(input.position.xy);
 
     // A dashed border shows the fill (or nothing, in border-only mode) in its gaps.
-    let dash = dash_coverage(input.position.xy, pos, scale, input.border_radius, input.shadow_blur_spread_dash.zw);
+    let max_border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w));
+    let dash = dash_coverage(input.position.xy, pos, scale, input.border_radius, input.shadow_blur_spread_dash.zw, max_border_width / 2.0);
 
     // Handle border_only mode: gradient fills only the border region
-    let max_border_width = max(max(input.border_widths.x, input.border_widths.y), max(input.border_widths.z, input.border_widths.w));
     if (bool(input.border_only) && max_border_width > 0.0) {
         let inner_dist = dist + max_border_width;
         return mixed_color * stroke_coverage(dist, inner_dist) * dash * clip_a;

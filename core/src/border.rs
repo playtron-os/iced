@@ -1,5 +1,5 @@
 //! Draw lines around containers.
-use crate::{Color, Pixels};
+use crate::{Color, Pixels, Size};
 
 /// A border.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -54,6 +54,41 @@ impl Dash {
     /// The pattern's period.
     pub fn period(self) -> f32 {
         self.on + self.off
+    }
+
+    /// The pattern Chromium dashes a closed outline `length` long with: the
+    /// gap stretched or squeezed so a whole number of dashes goes round it,
+    /// whichever count leaves the gap nearer its own.
+    pub fn fitted(self, length: f32) -> Self {
+        if self.on <= 0.0 || length <= 0.0 {
+            return self;
+        }
+        let fewer = (length / self.period()).floor();
+        let gap = |dashes: f32| (length - dashes * self.on) / dashes;
+        let more = gap(fewer + 1.0);
+        let off = if fewer < 1.0 || more <= 0.0 {
+            more.max(0.0)
+        } else {
+            let less = gap(fewer);
+            if (less - self.off).abs() < (more - self.off).abs() {
+                less
+            } else {
+                more
+            }
+        };
+        Self { off, ..self }
+    }
+
+    /// [`fitted`](Self::fitted) to the centre line of a `width` border round a
+    /// box of `size` with corner `radius` [tl, tr, br, bl], which is where
+    /// Chromium strokes it.
+    pub fn around(self, size: Size, radius: [f32; 4], width: f32) -> Self {
+        let (w, h) = (size.width - width, size.height - width);
+        let arcs: f32 = radius
+            .iter()
+            .map(|r| (r - width / 2.0).clamp(0.0, w.min(h) / 2.0))
+            .sum();
+        self.fitted(2.0 * (w + h) - 2.0 * arcs + std::f32::consts::FRAC_PI_2 * arcs)
     }
 }
 
@@ -224,6 +259,19 @@ mod dash_tests {
         assert_eq!(Dash::css(1.0), Dash { on: 3.0, off: 2.0 });
         assert_eq!(Dash::css(2.0), Dash { on: 6.0, off: 4.0 });
         assert_eq!(Dash::css(3.0), Dash { on: 6.0, off: 3.0 });
+    }
+
+    #[test]
+    fn a_closed_dash_fits_whole_dashes_round_the_outline() {
+        // Measured off Chromium: a 600×275.4 box rounded 14 with a 1px border
+        // has a centre line 1723.6 long, dashed 345 times with 1.996 gaps.
+        let dash = Dash::css(1.0).around(Size::new(600.0, 275.4), [14.0; 4], 1.0);
+        assert!((1723.62 / dash.period() - 345.0).abs() < 0.01, "{dash:?}");
+        assert!((dash.off - 1.996).abs() < 0.001, "{dash:?}");
+        // Fewer dashes when that leaves the gap nearer its own.
+        assert_eq!(Dash { on: 3.0, off: 2.0 }.fitted(26.0).off, 2.2);
+        // An outline shorter than a period still gets a dash.
+        assert_eq!(Dash { on: 3.0, off: 2.0 }.fitted(4.0).off, 1.0);
     }
 
     #[test]

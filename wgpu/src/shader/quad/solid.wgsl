@@ -139,7 +139,7 @@ fn solid_fs_main(
     var mixed_color = fill;
     if max_border_width > 0.0 {
         // A dashed border shows the fill in its gaps.
-        let dash = dash_coverage(input.position.xy, input.pos, input.scale, input.border_radius, input.border_dash);
+        let dash = dash_coverage(input.position.xy, input.pos, input.scale, input.border_radius, input.border_dash, max_border_width / 2.0);
 
         // Where inner and outer edges coincide (0-width sides), both coverages
         // cancel out, producing no border artifact.
