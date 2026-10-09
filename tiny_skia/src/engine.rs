@@ -36,6 +36,17 @@ impl Engine {
         clip_bounds: Rectangle,
         force_clip: bool,
     ) {
+        let snapped;
+        let quad = if quad.snap {
+            snapped = Quad {
+                bounds: snap(quad.bounds, transformation),
+                ..*quad
+            };
+            &snapped
+        } else {
+            quad
+        };
+
         let physical_bounds = quad.bounds * transformation;
         let shadow_bounds =
             (quad.shadow.color.a > 0.0).then(|| shadow::bounds(quad) * transformation);
@@ -663,6 +674,26 @@ fn into_transform(transformation: Transformation) -> tiny_skia::Transform {
         sy: transformation.scale_factor(),
         tx: translation.x,
         ty: translation.y,
+    }
+}
+
+/// `bounds` with each edge moved to the nearest device pixel, as the wgpu quad
+/// shader snaps a [`Quad`] that asks for it.
+fn snap(bounds: Rectangle, transformation: Transformation) -> Rectangle {
+    let physical = bounds * transformation;
+    let edge = |v: f32| (v + 0.001).round();
+    let (x, y) = (edge(physical.x), edge(physical.y));
+    let right = edge(physical.x + physical.width);
+    let bottom = edge(physical.y + physical.height);
+
+    let scale = transformation.scale_factor();
+    let translation = transformation.translation();
+
+    Rectangle {
+        x: (x - translation.x) / scale,
+        y: (y - translation.y) / scale,
+        width: (right - x) / scale,
+        height: (bottom - y) / scale,
     }
 }
 
@@ -1611,6 +1642,68 @@ mod tests {
             assert!((0..300).all(|x| blank(x, bottom + 1)), "{border:?}");
             assert!((0..200).all(|y| blank(right + 1, y)), "{border:?}");
         }
+    }
+
+    /// A quad that asks to be snapped fills whole device pixels, as the wgpu
+    /// renderer draws it; one that does not keeps its anti-aliased edges.
+    #[test]
+    fn a_snapped_quad_fills_whole_pixels() {
+        let bounds = Rectangle {
+            x: 10.3,
+            y: 8.25,
+            width: 20.4,
+            height: 10.5,
+        };
+        let coverage = |snap: bool| {
+            let mut pixmap = tiny_skia::Pixmap::new(80, 60).unwrap();
+            let mut mask = tiny_skia::Mask::new(80, 60).unwrap();
+            Engine::new().draw_quad(
+                &Quad {
+                    bounds,
+                    snap,
+                    ..Quad::default()
+                },
+                &Background::Color(Color::WHITE),
+                Transformation::scale(2.0),
+                &mut pixmap.as_mut(),
+                &mut mask,
+                EVERYTHING,
+                false,
+            );
+            let row = |y: u32| {
+                (0..80)
+                    .map(|x| pixmap.pixel(x, y).unwrap().alpha())
+                    .collect::<Vec<_>>()
+            };
+            let column = |x: u32| {
+                (0..60)
+                    .map(|y| pixmap.pixel(x, y).unwrap().alpha())
+                    .collect::<Vec<_>>()
+            };
+            (row(30), column(40))
+        };
+
+        // 20.6..61.4 by 16.5..37.5 device pixels rounds to 21..61 by 17..38.
+        let (row, column) = coverage(true);
+        assert!(
+            row.iter()
+                .enumerate()
+                .all(|(x, &a)| a == if (21..61).contains(&x) { 255 } else { 0 }),
+            "{row:?}"
+        );
+        assert!(
+            column
+                .iter()
+                .enumerate()
+                .all(|(y, &a)| a == if (17..38).contains(&y) { 255 } else { 0 }),
+            "{column:?}"
+        );
+
+        let (row, _) = coverage(false);
+        assert!(
+            row[20] > 0 && row[20] < 255,
+            "an unsnapped edge is anti-aliased: {row:?}"
+        );
     }
 
     /// The damaged area is cleared first, so a strip of shadow the quad does not
