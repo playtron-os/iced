@@ -37,7 +37,10 @@
 //!
 //! When the switch is on, the app listens on a Unix socket only its own user
 //! can reach, at `$XDG_RUNTIME_DIR/iced-automation/<app id>-<pid>.sock`, and
-//! answers one JSON object per line:
+//! answers one JSON object per line. Beside the socket is a `.lock` the app
+//! holds while it runs. When another running app already has the name (two
+//! copies of one app, each in a pid namespace of its own, can have the same
+//! pid), the socket is `<app id>-<pid>-2.sock`, and so on.
 //!
 //! | request | reply |
 //! |---|---|
@@ -84,6 +87,10 @@
 //! Every client is logged as it connects, leaves or is turned away, with its
 //! pid and program as far as the app can see them. A client in a pid
 //! namespace the app can't see into is logged as coming from outside it.
+//! These lines, and the one saying the door opened, go to the systemd journal
+//! under the app's id (`journalctl --user -t <app id>`), or to stderr where
+//! there is no journal, and never through the app's own logger: its filter
+//! must not be able to hide who drives the app.
 //!
 //! # For event loops
 //!
@@ -114,11 +121,11 @@ use std::cell::Cell;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -288,6 +295,53 @@ static INBOX: Mutex<Option<mpsc::Receiver<Job>>> = Mutex::new(None);
 /// Whether the door is open in this process.
 static OPEN: AtomicBool = AtomicBool::new(false);
 
+/// The app id the door's lines go to the journal under.
+static IDENTIFIER: OnceLock<String> = OnceLock::new();
+
+/// Where systemd's journal takes entries in its native protocol.
+const JOURNAL: &str = "/run/systemd/journal/socket";
+
+/// How much a line of the door's matters, as the journal ranks it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Priority {
+    Warning = 4,
+    Info = 6,
+}
+
+/// Says something about the door: that it opened, or who came and went. It
+/// goes to the systemd journal under the app's id, and to stderr where there
+/// is no journal, never through the app's logger, whose filter could drop it.
+fn report(priority: Priority, message: impl std::fmt::Display) {
+    let message = format!("iced_automation: {message}");
+
+    if !cfg!(test) {
+        let identifier = IDENTIFIER.get().map_or("iced", String::as_str);
+        let entry = journal_entry(priority, identifier, &message);
+
+        let sent = std::os::unix::net::UnixDatagram::unbound()
+            .and_then(|journal| journal.send_to(&entry, JOURNAL));
+
+        if sent.is_ok() {
+            return;
+        }
+    }
+
+    eprintln!("{message}");
+}
+
+/// A journal entry in the native protocol: one `FIELD=value` per line.
+fn journal_entry(priority: Priority, identifier: &str, message: &str) -> Vec<u8> {
+    let field = |value: &str| value.replace('\n', " ");
+
+    format!(
+        "PRIORITY={}\nSYSLOG_IDENTIFIER={}\nMESSAGE={}\n",
+        priority as u8,
+        field(identifier),
+        field(message)
+    )
+    .into_bytes()
+}
+
 type Wake = Arc<dyn Fn() + Send + Sync>;
 
 /// An open door. Dropping it shuts the door: it removes the socket, and every
@@ -296,6 +350,8 @@ type Wake = Arc<dyn Fn() + Send + Sync>;
 #[must_use = "dropping the door removes its socket at once"]
 pub struct Open {
     path: PathBuf,
+    /// Held while the door runs, so a sweep knows its socket is in use.
+    _lock: fs::File,
 }
 
 impl Open {
@@ -315,7 +371,7 @@ impl Drop for Open {
             *inbox = None;
         }
 
-        let _ = fs::remove_file(&self.path);
+        remove_socket(&self.path);
     }
 }
 
@@ -440,20 +496,24 @@ fn open_door(
         .clone()
         .unwrap_or_else(|| PathBuf::from(DEFAULT_SWITCH));
     let app_id = app_id.unwrap_or("app").to_owned();
+    let _ = IDENTIFIER.set(app_id.clone());
 
     let policy = match read_policy(&switch, trusted) {
         Ok(policy) => policy,
         Err(Shut::Off) => return None,
         Err(Shut::Refused(why)) => {
-            log::warn!("automation: door stays shut: {why}");
+            report(Priority::Warning, format_args!("door stays shut: {why}"));
             return None;
         }
     };
 
     if !policy.allows(&app_id) {
-        log::info!(
-            "automation: door stays shut: {} doesn't list {app_id}",
-            switch.display()
+        report(
+            Priority::Info,
+            format_args!(
+                "door stays shut: {} doesn't list {app_id}",
+                switch.display()
+            ),
         );
         return None;
     }
@@ -461,24 +521,37 @@ fn open_door(
     // Before anything touches the socket folder: a second door would bind,
     // and then remove, the first one's socket.
     if is_open() {
-        log::warn!("automation: the door is already open in this process");
+        report(
+            Priority::Warning,
+            "the door is already open in this process",
+        );
         return None;
     }
 
     let Some(runtime_dir) = runtime_dir else {
-        log::warn!(
-            "automation: {} is on, but XDG_RUNTIME_DIR is unset; door stays shut",
-            switch.display()
+        report(
+            Priority::Warning,
+            format_args!(
+                "{} is on, but XDG_RUNTIME_DIR is unset; door stays shut",
+                switch.display()
+            ),
         );
         return None;
     };
 
-    let (listener, path) = match listen(&runtime_dir, Some(&app_id)) {
-        Ok(opened) => opened,
+    let Socket {
+        listener,
+        path,
+        lock,
+    } = match listen(&runtime_dir, Some(&app_id)) {
+        Ok(socket) => socket,
         Err(error) => {
-            log::warn!(
-                "automation: {} is on, but the door could not open: {error}",
-                switch.display()
+            report(
+                Priority::Warning,
+                format_args!(
+                    "{} is on, but the door could not open: {error}",
+                    switch.display()
+                ),
             );
             return None;
         }
@@ -488,25 +561,31 @@ fn open_door(
 
     {
         let Ok(mut slot) = INBOX.lock() else {
-            let _ = fs::remove_file(&path);
+            remove_socket(&path);
             return None;
         };
 
         if slot.is_some() || OPEN.swap(true, Ordering::SeqCst) {
-            log::warn!("automation: the door is already open in this process");
-            let _ = fs::remove_file(&path);
+            report(
+                Priority::Warning,
+                "the door is already open in this process",
+            );
+            remove_socket(&path);
             return None;
         }
 
         *slot = Some(inbox);
     }
 
-    let open = Open { path };
+    let open = Open { path, _lock: lock };
 
-    log::warn!(
-        "automation: door open at {} because {} is on",
-        open.path.display(),
-        switch.display()
+    report(
+        Priority::Warning,
+        format_args!(
+            "door open at {} because {} is on",
+            open.path.display(),
+            switch.display()
+        ),
     );
 
     let shared = Arc::new(Shared {
@@ -810,7 +889,7 @@ fn switch_is_on(switch: &Path, trusted: &Trust) -> bool {
     false
 }
 
-fn listen(runtime_dir: &Path, app_id: Option<&str>) -> io::Result<(UnixListener, PathBuf)> {
+fn listen(runtime_dir: &Path, app_id: Option<&str>) -> io::Result<Socket> {
     let user = rustix::process::geteuid().as_raw();
 
     // Both folders must belong to the user the app runs as. Otherwise someone
@@ -866,20 +945,92 @@ fn listen(runtime_dir: &Path, app_id: Option<&str>) -> io::Result<(UnixListener,
         })
         .collect();
 
-    let suffix = format!("-{}.sock", std::process::id());
-    let name = fit_name(&name, &dir, &suffix)?;
-    let path = dir.join(format!("{name}{suffix}"));
+    // Every app a Kora workspace launches has a pid namespace of its own, so
+    // two copies of one app can have the same pid there: the second takes the
+    // next name instead of the first one's socket.
+    let pid = std::process::id();
 
-    match fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+    for copy in 1..=MAX_COPIES {
+        let suffix = if copy == 1 {
+            format!("-{pid}.sock")
+        } else {
+            format!("-{pid}-{copy}.sock")
+        };
+        let name = fit_name(&name, &dir, &suffix)?;
+        let path = dir.join(format!("{name}{suffix}"));
+
+        let Some(lock) = take_lock(&path.with_extension("lock"))? else {
+            continue;
+        };
+
+        // A socket here is one a door that is gone left behind.
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        let listener = UnixListener::bind(&path)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+
+        return Ok(Socket {
+            listener,
+            path,
+            lock,
+        });
     }
 
-    let listener = UnixListener::bind(&path)?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    Err(io::Error::other(format!(
+        "{MAX_COPIES} doors named {name} are open already"
+    )))
+}
 
-    Ok((listener, path))
+/// How many doors of one app, with one pid, can be open in one folder.
+const MAX_COPIES: u32 = 64;
+
+/// A door's socket, and the lock beside it that it holds while it runs.
+struct Socket {
+    listener: UnixListener,
+    path: PathBuf,
+    lock: fs::File,
+}
+
+/// Takes the lock at `path`, creating it, unless a running door holds it.
+///
+/// Only a lock on the file still at `path` counts: a sweep removes a lock file
+/// it finds free, and may do so between this opening the file and locking it.
+fn take_lock(path: &Path) -> io::Result<Option<fs::File>> {
+    use rustix::fs::{FlockOperation, flock};
+
+    loop {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)?;
+
+        match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => {}
+            Err(rustix::io::Errno::WOULDBLOCK) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        }
+
+        let ours = file.metadata()?;
+        let still_there = fs::symlink_metadata(path)
+            .is_ok_and(|there| there.dev() == ours.dev() && there.ino() == ours.ino());
+
+        if still_there {
+            return Ok(Some(file));
+        }
+    }
+}
+
+/// Removes a door's socket and its lock.
+fn remove_socket(path: &Path) {
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(path.with_extension("lock"));
 }
 
 /// A socket path must fit in `sun_path` (108 bytes, with its NUL). A name too
@@ -912,25 +1063,47 @@ fn fit_name(name: &str, dir: &Path, suffix: &str) -> io::Result<String> {
     Ok(format!("{}~{hash:08x}", &name[..room - HASH]))
 }
 
-/// Removes the sockets of apps that are no longer running.
+/// Removes the sockets of doors that are gone.
+///
+/// A door holds the lock beside its socket for as long as it runs, so one whose
+/// lock nobody holds is gone, whatever pid namespace it ran in. A socket with
+/// no lock, from an older door, is judged by whether its pid still runs here.
 fn sweep(dir: &Path) {
+    use rustix::fs::{FlockOperation, flock};
+
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
 
     for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(pid) = name
-            .to_str()
-            .and_then(|name| name.strip_suffix(".sock"))
-            .and_then(|stem| stem.rsplit_once('-'))
-            .and_then(|(_, pid)| pid.parse::<u32>().ok())
-        else {
-            continue;
-        };
+        let path = entry.path();
 
-        if !Path::new("/proc").join(pid.to_string()).exists() {
-            let _ = fs::remove_file(entry.path());
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("lock") => {
+                let free = fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&path)
+                    .is_ok_and(|lock| {
+                        flock(&lock, FlockOperation::NonBlockingLockExclusive).is_ok()
+                    });
+
+                if free {
+                    remove_socket(&path.with_extension("sock"));
+                }
+            }
+            Some("sock") if !path.with_extension("lock").exists() => {
+                let pid = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .and_then(|stem| stem.rsplit_once('-'))
+                    .and_then(|(_, pid)| pid.parse::<u32>().ok());
+
+                if pid.is_some_and(|pid| !Path::new("/proc").join(pid.to_string()).exists()) {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -1003,14 +1176,14 @@ fn accept(listener: &UnixListener, shared: &Arc<Shared>) {
         );
         let leaving = clients.clone();
 
-        log::warn!("automation: {peer} connected");
+        report(Priority::Warning, format_args!("{peer} connected"));
 
         let spawned = thread::Builder::new()
             .name("iced-automation-client".into())
             .spawn(move || {
                 door.converse(stream);
                 let _ = leaving.fetch_sub(1, Ordering::SeqCst);
-                log::info!("automation: {peer} left");
+                report(Priority::Info, format_args!("{peer} left"));
             });
 
         if spawned.is_err() {
@@ -1023,7 +1196,10 @@ fn accept(listener: &UnixListener, shared: &Arc<Shared>) {
 /// the socket closes, so a client that writes before it reads gets the reason
 /// rather than a broken pipe.
 fn refuse(mut stream: UnixStream, why: &str) {
-    log::info!("automation: turned {} away: {why}", peer(&stream));
+    report(
+        Priority::Info,
+        format_args!("turned {} away: {why}", peer(&stream)),
+    );
 
     let _ = writeln!(stream, "{}", json!({ "error": why }));
     let _ = stream.shutdown(std::net::Shutdown::Write);
@@ -2580,7 +2756,7 @@ mod tests {
     fn a_long_app_id_still_fits_in_a_socket_path() {
         let dir = runtime(&scratch("long"));
         let long = "org.example.a-very-long-application-identifier-that-goes-on.and-on.and-on";
-        let (_listener, path) = listen(&dir, Some(long)).expect("listen");
+        let Socket { path, .. } = listen(&dir, Some(long)).expect("listen");
 
         assert!(path.as_os_str().len() < 108, "{path:?}");
 
@@ -2593,14 +2769,16 @@ mod tests {
 
         // Two long names that differ only at the end don't collide.
         let other = format!("{long}2");
-        let (_other_listener, other_path) = listen(&dir, Some(&other)).expect("listen");
+        let Socket {
+            path: other_path, ..
+        } = listen(&dir, Some(&other)).expect("listen");
         assert_ne!(path, other_path);
     }
 
     #[test]
     fn the_socket_is_private_to_the_user() {
         let dir = runtime(&scratch("socket"));
-        let (_listener, path) = listen(&dir, Some("org.kora/slate")).expect("listen");
+        let Socket { path, .. } = listen(&dir, Some("org.kora/slate")).expect("listen");
 
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
@@ -2617,6 +2795,61 @@ mod tests {
                 .mode()
                 & 0o777,
             0o700
+        );
+    }
+
+    #[test]
+    fn a_second_door_with_the_same_name_takes_the_next_one() {
+        // As two copies of an app launched into one Kora workspace can, each
+        // with the same pid in a pid namespace of its own.
+        let dir = runtime(&scratch("copies"));
+        let first = listen(&dir, Some("twin")).expect("listen");
+        let second = listen(&dir, Some("twin")).expect("listen");
+        let pid = std::process::id();
+
+        assert_eq!(
+            first.path.file_name(),
+            Some(format!("twin-{pid}.sock").as_ref())
+        );
+        assert_eq!(
+            second.path.file_name(),
+            Some(format!("twin-{pid}-2.sock").as_ref())
+        );
+        assert!(first.path.exists() && second.path.exists());
+    }
+
+    #[test]
+    fn a_sweep_removes_only_the_sockets_of_doors_that_are_gone() {
+        let dir = runtime(&scratch("sweep"));
+        let sockets = dir.join("iced-automation");
+        let live = listen(&dir, Some("live")).expect("listen");
+        let gone = listen(&dir, Some("gone")).expect("listen");
+        let gone_path = gone.path.clone();
+
+        // A door that died leaves its socket and lock behind, the lock free.
+        drop(gone);
+
+        // Sockets from before locks: one of a pid that is gone, one of ours.
+        let old_gone = sockets.join("old-4294967295.sock");
+        let old_live = sockets.join(format!("old-{}.sock", std::process::id()));
+        fs::write(&old_gone, "").expect("create");
+        fs::write(&old_live, "").expect("create");
+
+        sweep(&sockets);
+
+        assert!(live.path.exists() && live.path.with_extension("lock").exists());
+        assert!(!gone_path.exists() && !gone_path.with_extension("lock").exists());
+        assert!(!old_gone.exists());
+        assert!(old_live.exists());
+    }
+
+    #[test]
+    fn a_journal_entry_names_the_app_and_keeps_to_one_line() {
+        let entry = journal_entry(Priority::Warning, "org.example.app", "door open\nat /x");
+
+        assert_eq!(
+            String::from_utf8(entry).expect("UTF-8"),
+            "PRIORITY=4\nSYSLOG_IDENTIFIER=org.example.app\nMESSAGE=door open at /x\n"
         );
     }
 
@@ -3166,14 +3399,21 @@ mod tests {
     fn the_socket_goes_when_the_door_closes() {
         let _turn = real_door();
         let dir = runtime(&scratch("close"));
-        let (listener, path) = listen(&dir, Some("test")).expect("listen");
+        let Socket {
+            listener,
+            path,
+            lock,
+        } = listen(&dir, Some("test")).expect("listen");
         drop(listener);
 
-        let open = Open { path: path.clone() };
-        assert!(path.exists());
+        let open = Open {
+            path: path.clone(),
+            _lock: lock,
+        };
+        assert!(path.exists() && path.with_extension("lock").exists());
 
         drop(open);
-        assert!(!path.exists());
+        assert!(!path.exists() && !path.with_extension("lock").exists());
     }
 
     #[test]
