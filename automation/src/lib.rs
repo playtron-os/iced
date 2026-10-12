@@ -75,6 +75,10 @@
 //! poll no faster than every 16 ms, and clients that send nothing for a while
 //! are let go.
 //!
+//! Every client is logged as it connects, leaves or is turned away, with its
+//! pid and program as far as the app can see them. A client in a pid
+//! namespace the app can't see into is logged as coming from outside it.
+//!
 //! # For event loops
 //!
 //! This crate owns the switch, the socket and the protocol; it knows nothing
@@ -103,6 +107,7 @@ pub use crate::core::automation::{Config, Ops};
 use std::cell::Cell;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -894,6 +899,7 @@ fn accept(listener: &UnixListener, shared: &Arc<Shared>) {
         let _ = stream.set_read_timeout(Some(limits.idle_client));
         let _ = stream.set_write_timeout(Some(limits.idle_client));
 
+        let peer = peer(&stream);
         let door = Door::new(
             shared.jobs.clone(),
             shared.wake.clone(),
@@ -906,11 +912,14 @@ fn accept(listener: &UnixListener, shared: &Arc<Shared>) {
         );
         let leaving = clients.clone();
 
+        log::warn!("automation: {peer} connected");
+
         let spawned = thread::Builder::new()
             .name("iced-automation-client".into())
             .spawn(move || {
                 door.converse(stream);
                 let _ = leaving.fetch_sub(1, Ordering::SeqCst);
+                log::info!("automation: {peer} left");
             });
 
         if spawned.is_err() {
@@ -923,10 +932,58 @@ fn accept(listener: &UnixListener, shared: &Arc<Shared>) {
 /// the socket closes, so a client that writes before it reads gets the reason
 /// rather than a broken pipe.
 fn refuse(mut stream: UnixStream, why: &str) {
+    log::info!("automation: turned {} away: {why}", peer(&stream));
+
     let _ = writeln!(stream, "{}", json!({ "error": why }));
     let _ = stream.shutdown(std::net::Shutdown::Write);
     let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
     let _ = (&stream).take(MAX_REQUEST).read_to_end(&mut Vec::new());
+}
+
+/// Who is at the other end of `stream`, for the log: its pid and program, as
+/// far as this process can see them.
+fn peer(stream: &UnixStream) -> String {
+    match peer_pid(stream) {
+        Ok(0) => "a client outside this app's pid namespace".to_owned(),
+        Ok(pid) => match fs::read_link(format!("/proc/{pid}/exe")) {
+            Ok(exe) => format!("pid {pid} ({})", exe.display()),
+            Err(_) => format!("pid {pid}"),
+        },
+        Err(error) => format!("a client of unknown pid ({error})"),
+    }
+}
+
+/// The pid of the process at the other end of `stream`, in this process's pid
+/// namespace: 0 when it has none there.
+///
+/// Not rustix's `get_socket_peercred`: it reads the pid as non-zero, and the
+/// kernel reports 0 for a peer this namespace can't see.
+fn peer_pid(stream: &UnixStream) -> io::Result<libc::pid_t> {
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+
+    // SAFETY: `credentials` and `length` outlive the call, and `length` is
+    // the size of what `credentials` points to.
+    #[allow(unsafe_code)]
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut credentials).cast(),
+            &raw mut length,
+        )
+    };
+
+    if result == 0 {
+        Ok(credentials.pid)
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 /// A request handed to the event loop, with where to send the answer.
@@ -2394,6 +2451,17 @@ mod tests {
                 .mode()
                 & 0o777,
             0o700
+        );
+    }
+
+    #[test]
+    fn a_client_is_logged_by_its_pid_and_program() {
+        let (ours, _theirs) = UnixStream::pair().expect("pair");
+        let exe = fs::read_link("/proc/self/exe").expect("exe");
+
+        assert_eq!(
+            peer(&ours),
+            format!("pid {} ({})", std::process::id(), exe.display())
         );
     }
 

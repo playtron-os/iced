@@ -16,6 +16,7 @@ iced_core.workspace = true
 log.workspace = true
 serde_json.workspace = true
 rustix = { version = "0.38", features = ["process", "net", "event"] }
+libc = "0.2"
 
 [lints]
 workspace = true
