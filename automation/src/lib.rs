@@ -10,6 +10,12 @@
 //! read again for every connection, so removing it shuts the door for every
 //! new client without restarting the app.
 //!
+//! An app in a sandbox whose user namespace doesn't map root, such as a Kora
+//! workspace's, sees root's files as the kernel's overflow uid, under a `/`
+//! that belongs to its user. There the switch counts when every step from the
+//! last mount down to it is root's as the sandbox shows it: nothing inside a
+//! sandbox can change its mounts, and they are where root's files come from.
+//!
 //! An empty switch file opens the door with its defaults. Otherwise the file
 //! is JSON, and lets the administrator narrow what the door does; a file the
 //! door can't read as that keeps it shut:
@@ -346,7 +352,7 @@ pub fn start_with(
 
     open_door(
         config,
-        &[0],
+        &Trust::root(),
         runtime_dir,
         app_id.or(program.as_deref()),
         Arc::new(wake),
@@ -413,8 +419,8 @@ pub fn frame_due(requested_at: Option<Instant>, redraw_at: Option<Instant>, now:
 struct Shared {
     config: Config,
     switch: PathBuf,
-    /// The owners a switch may have: root, except in tests.
-    trusted: Vec<u32>,
+    /// Who could have put a switch in place.
+    trusted: Trust,
     app_id: String,
     wake: Wake,
     jobs: mpsc::Sender<Job>,
@@ -424,7 +430,7 @@ struct Shared {
 
 fn open_door(
     config: Config,
-    trusted: &[u32],
+    trusted: &Trust,
     runtime_dir: Option<PathBuf>,
     app_id: Option<&str>,
     wake: Wake,
@@ -506,7 +512,7 @@ fn open_door(
     let shared = Arc::new(Shared {
         config,
         switch,
-        trusted: trusted.to_vec(),
+        trusted: trusted.clone(),
         app_id,
         wake,
         jobs,
@@ -531,7 +537,7 @@ enum Shut {
 }
 
 /// What the switch at `switch` allows, if it is on.
-fn read_policy(switch: &Path, trusted: &[u32]) -> Result<Policy, Shut> {
+fn read_policy(switch: &Path, trusted: &Trust) -> Result<Policy, Shut> {
     if !switch_is_on(switch, trusted) {
         return Err(Shut::Off);
     }
@@ -632,16 +638,81 @@ fn parse_policy(contents: &str) -> Result<Policy, String> {
     Ok(policy)
 }
 
-/// Whether `switch` is a file that only root could have put there. (`trusted`
-/// is the owners that count as root: just root, except in tests.)
+/// Who could have put a switch in place.
+#[derive(Debug, Clone)]
+struct Trust {
+    /// The owners that count as root.
+    owners: Vec<u32>,
+    /// In a sandbox, how to tell the root of a mount: there, a mount counts as
+    /// root's wherever it is mounted, because the sandbox's `/` and the folders
+    /// it mounts into are its user's, and nothing inside can change its mounts.
+    mount_root: Option<fn(&Path) -> bool>,
+}
+
+impl Trust {
+    /// Root, as this process sees it. In a user namespace that doesn't map
+    /// root, as a Kora workspace's or another bwrap sandbox's doesn't, root's
+    /// files show up as the kernel's overflow uid.
+    fn root() -> Self {
+        let sandboxed =
+            fs::read_to_string("/proc/self/uid_map").is_ok_and(|uid_map| !maps_root(&uid_map));
+        let overflow = fs::read_to_string("/proc/sys/kernel/overflowuid")
+            .ok()
+            .and_then(|uid| uid.trim().parse().ok());
+
+        match overflow {
+            Some(overflow) if sandboxed => Self {
+                owners: vec![0, overflow],
+                mount_root: Some(is_mount_root),
+            },
+            _ => Self {
+                owners: vec![0],
+                mount_root: None,
+            },
+        }
+    }
+
+    fn owns(&self, metadata: &fs::Metadata) -> bool {
+        self.owners.contains(&metadata.uid())
+    }
+}
+
+/// Whether a `uid_map` maps the root of the namespace outside it.
+fn maps_root(uid_map: &str) -> bool {
+    uid_map.lines().any(|line| {
+        let mut fields = line.split_whitespace().map(str::parse::<u64>);
+
+        matches!(
+            (fields.next(), fields.next(), fields.next()),
+            (Some(Ok(_)), Some(Ok(0)), Some(Ok(count))) if count > 0
+        )
+    })
+}
+
+/// Whether `path` itself, not what a link there points to, is a mount's root.
+fn is_mount_root(path: &Path) -> bool {
+    use rustix::fs::{AtFlags, CWD, StatxFlags};
+
+    // The kernel's STATX_ATTR_MOUNT_ROOT, which libc leaves out on some targets.
+    const MOUNT_ROOT: u64 = 0x2000;
+
+    rustix::fs::statx(CWD, path, AtFlags::SYMLINK_NOFOLLOW, StatxFlags::empty()).is_ok_and(|stat| {
+        stat.stx_attributes_mask & MOUNT_ROOT != 0 && stat.stx_attributes & MOUNT_ROOT != 0
+    })
+}
+
+/// Whether `switch` is a file that only root could have put there, as
+/// `trusted` says who counts as root.
 ///
 /// The path is walked one step at a time, following symlinks by hand. Every
 /// folder, symlink and the file itself must belong to root, the file must not
 /// be writable by anyone else, and no folder on the way may be writable by
 /// anyone else unless it is sticky (as `/nix/store` is), where others cannot
 /// replace what root put there. So a NixOS `environment.etc` link into the
-/// store counts, and a link to a file a user could recreate does not.
-fn switch_is_on(switch: &Path, trusted: &[u32]) -> bool {
+/// store counts, and a link to a file a user could recreate does not. In a
+/// sandbox, a step may also be a mount root put in a folder that isn't root's,
+/// as `/etc` and `/nix/store` are in a bwrap sandbox's own `/` and `/nix`.
+fn switch_is_on(switch: &Path, trusted: &Trust) -> bool {
     use std::collections::VecDeque;
     use std::ffi::OsString;
     use std::path::Component;
@@ -656,21 +727,27 @@ fn switch_is_on(switch: &Path, trusted: &[u32]) -> bool {
 
     let root_folder = |metadata: &fs::Metadata| {
         metadata.is_dir()
-            && trusted.contains(&metadata.uid())
+            && trusted.owns(metadata)
             && (metadata.mode() & 0o022 == 0 || metadata.mode() & 0o1000 != 0)
     };
 
-    if !switch.is_absolute() || !fs::symlink_metadata("/").is_ok_and(|root| root_folder(&root)) {
+    let root_is_roots = fs::symlink_metadata("/").is_ok_and(|root| root_folder(&root));
+
+    if !switch.is_absolute() || !(root_is_roots || trusted.mount_root.is_some()) {
         return false;
     }
 
     let mut here = PathBuf::from("/");
+    // Whether each folder from `/` down to `here` is one only root can change.
+    let mut roots = vec![root_is_roots];
     let mut rest: VecDeque<OsString> = parts(switch).collect();
     let mut links = 0;
 
     while let Some(part) = rest.pop_front() {
         if part == ".." {
-            let _ = here.pop();
+            if here.pop() {
+                let _ = roots.pop();
+            }
             continue;
         }
 
@@ -679,11 +756,17 @@ fn switch_is_on(switch: &Path, trusted: &[u32]) -> bool {
             return false;
         };
 
-        if !trusted.contains(&metadata.uid()) {
-            return false;
-        }
+        let put_by_root = (roots.last() == Some(&true)
+            || trusted
+                .mount_root
+                .is_some_and(|mount_root| mount_root(&next)))
+            && trusted.owns(&metadata);
 
         if metadata.file_type().is_symlink() {
+            if !put_by_root {
+                return false;
+            }
+
             links += 1;
 
             let Ok(target) = fs::read_link(&next) else {
@@ -696,6 +779,7 @@ fn switch_is_on(switch: &Path, trusted: &[u32]) -> bool {
 
             if target.is_absolute() {
                 here = PathBuf::from("/");
+                roots = vec![root_is_roots];
             }
 
             for part in parts(&target).collect::<Vec<_>>().into_iter().rev() {
@@ -706,10 +790,17 @@ fn switch_is_on(switch: &Path, trusted: &[u32]) -> bool {
         }
 
         if rest.is_empty() {
-            return metadata.is_file() && metadata.mode() & 0o022 == 0;
+            return put_by_root && metadata.is_file() && metadata.mode() & 0o022 == 0;
         }
 
-        if !root_folder(&metadata) {
+        if put_by_root && root_folder(&metadata) {
+            roots.push(true);
+        } else if trusted.mount_root.is_some() && metadata.is_dir() {
+            // In a sandbox, a folder that isn't root's (`/nix`, on the way to
+            // `/nix/store`) is walked through, trusting nothing in it until a
+            // mount of root's: no link in it is followed and no file counts.
+            roots.push(false);
+        } else {
             return false;
         }
 
@@ -2217,15 +2308,18 @@ mod tests {
     /// what a test can't create itself (this user; the owner of `/`, which is
     /// not root in a Nix sandbox; the owner of the scratch base). So a switch a
     /// test makes can be accepted, and every other rule still checked.
-    fn trusted() -> Vec<u32> {
+    fn trusted() -> Trust {
         let owner = |path: &str| fs::metadata(path).map_or(0, |metadata| metadata.uid());
 
-        vec![
-            0,
-            rustix::process::geteuid().as_raw(),
-            owner("/"),
-            owner("/tmp"),
-        ]
+        Trust {
+            owners: vec![
+                0,
+                rustix::process::geteuid().as_raw(),
+                owner("/"),
+                owner("/tmp"),
+            ],
+            mount_root: None,
+        }
     }
 
     fn noop() -> Wake {
@@ -2313,7 +2407,79 @@ mod tests {
         let made_by_root = fs::metadata(&switch).expect("metadata").uid() == 0;
         let tree_is_roots = fs::metadata("/").expect("/").uid() == 0;
 
-        assert_eq!(switch_is_on(&switch, &[0]), made_by_root && tree_is_roots);
+        let only_root = Trust {
+            owners: vec![0],
+            mount_root: None,
+        };
+
+        assert_eq!(
+            switch_is_on(&switch, &only_root),
+            made_by_root && tree_is_roots
+        );
+    }
+
+    #[test]
+    fn a_namespace_that_maps_root_is_not_a_sandbox() {
+        assert!(maps_root("         0          0 4294967295\n"));
+        assert!(!maps_root("      1000       1000          1\n"), "bwrap");
+        assert!(
+            !maps_root("         0       1000          1\n"),
+            "unshare -r"
+        );
+        assert!(!maps_root(""));
+    }
+
+    #[test]
+    fn in_a_sandbox_a_mount_of_roots_counts_wherever_it_is_mounted() {
+        // A folder others can write stands in for the sandbox's own `/`, and
+        // `mounted` for a mount of root's in it.
+        let dir = scratch("sandbox");
+        let own = dir.join("own");
+        let mounted = own.join("mounted");
+        fs::create_dir_all(&mounted).expect("create folders");
+        fs::set_permissions(&own, fs::Permissions::from_mode(0o777)).expect("chmod");
+        fs::set_permissions(&mounted, fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let switch = mounted.join("automation-enabled");
+        fs::write(&switch, "").expect("create switch");
+        fs::set_permissions(&switch, fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        let sandbox = Trust {
+            mount_root: Some(|path| path.ends_with("mounted")),
+            ..trusted()
+        };
+
+        assert!(
+            !switch_is_on(&switch, &trusted()),
+            "outside a sandbox, a folder others can write breaks the chain"
+        );
+        assert!(switch_is_on(&switch, &sandbox));
+
+        // Nothing in the sandbox's own folders counts, neither a file nor a
+        // link to a switch that does.
+        let loose = own.join("automation-enabled");
+        fs::write(&loose, "").expect("create file");
+        fs::set_permissions(&loose, fs::Permissions::from_mode(0o644)).expect("chmod");
+        assert!(!switch_is_on(&loose, &sandbox));
+
+        let link = own.join("link");
+        std::os::unix::fs::symlink(&switch, &link).expect("link");
+        assert!(!switch_is_on(&link, &sandbox));
+    }
+
+    #[test]
+    #[ignore = "needs a user-namespace sandbox, such as a Kora workspace's"]
+    fn in_a_real_sandbox_roots_files_count_and_mine_do_not() {
+        let trust = Trust::root();
+        assert!(trust.mount_root.is_some(), "this is not a sandbox");
+
+        // On NixOS, a link through /etc/static into the store.
+        assert!(switch_is_on(Path::new("/etc/os-release"), &trust));
+
+        let mine = scratch("mine").join("automation-enabled");
+        fs::write(&mine, "").expect("create file");
+        fs::set_permissions(&mine, fs::Permissions::from_mode(0o644)).expect("chmod");
+        assert!(!switch_is_on(&mine, &trust));
     }
 
     #[test]
