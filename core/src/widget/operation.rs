@@ -2,10 +2,12 @@
 pub mod auto_focusable;
 pub mod focusable;
 pub mod scrollable;
+pub mod selection;
 pub mod text_input;
 
 pub use focusable::{FocusGroup, Focusable};
 pub use scrollable::Scrollable;
+pub use selection::Selectable;
 pub use text_input::TextInput;
 
 use crate::widget::Id;
@@ -103,6 +105,15 @@ pub trait Operation<T = ()>: Send {
     /// Operates on a widget that contains some text.
     fn text(&mut self, _id: Option<&Id>, _bounds: Rectangle, _text: &str) {}
 
+    /// Operates on a widget whose text can be selected.
+    fn selectable_text(
+        &mut self,
+        _id: Option<&Id>,
+        _bounds: Rectangle,
+        _state: &mut dyn Selectable,
+    ) {
+    }
+
     /// Operates on a custom widget with some state.
     fn custom(&mut self, _id: Option<&Id>, _bounds: Rectangle, _state: &mut dyn Any) {}
 
@@ -166,6 +177,10 @@ where
 
     fn text(&mut self, id: Option<&Id>, bounds: Rectangle, text: &str) {
         self.as_mut().text(id, bounds, text);
+    }
+
+    fn selectable_text(&mut self, id: Option<&Id>, bounds: Rectangle, state: &mut dyn Selectable) {
+        self.as_mut().selectable_text(id, bounds, state);
     }
 
     fn custom(&mut self, id: Option<&Id>, bounds: Rectangle, state: &mut dyn Any) {
@@ -267,6 +282,15 @@ where
 
         fn text(&mut self, id: Option<&Id>, bounds: Rectangle, text: &str) {
             self.operation.text(id, bounds, text);
+        }
+
+        fn selectable_text(
+            &mut self,
+            id: Option<&Id>,
+            bounds: Rectangle,
+            state: &mut dyn Selectable,
+        ) {
+            self.operation.selectable_text(id, bounds, state);
         }
 
         fn custom(&mut self, id: Option<&Id>, bounds: Rectangle, state: &mut dyn Any) {
@@ -373,6 +397,15 @@ where
                     self.operation.text(id, bounds, text);
                 }
 
+                fn selectable_text(
+                    &mut self,
+                    id: Option<&Id>,
+                    bounds: Rectangle,
+                    state: &mut dyn Selectable,
+                ) {
+                    self.operation.selectable_text(id, bounds, state);
+                }
+
                 fn custom(&mut self, id: Option<&Id>, bounds: Rectangle, state: &mut dyn Any) {
                     self.operation.custom(id, bounds, state);
                 }
@@ -429,6 +462,15 @@ where
 
         fn text(&mut self, id: Option<&Id>, bounds: Rectangle, text: &str) {
             self.operation.text(id, bounds, text);
+        }
+
+        fn selectable_text(
+            &mut self,
+            id: Option<&Id>,
+            bounds: Rectangle,
+            state: &mut dyn Selectable,
+        ) {
+            self.operation.selectable_text(id, bounds, state);
         }
 
         fn custom(&mut self, id: Option<&Id>, bounds: Rectangle, state: &mut dyn Any) {
@@ -530,6 +572,15 @@ where
 
         fn text(&mut self, id: Option<&Id>, bounds: Rectangle, text: &str) {
             self.operation.text(id, bounds, text);
+        }
+
+        fn selectable_text(
+            &mut self,
+            id: Option<&Id>,
+            bounds: Rectangle,
+            state: &mut dyn Selectable,
+        ) {
+            self.operation.selectable_text(id, bounds, state);
         }
 
         fn custom(&mut self, id: Option<&Id>, bounds: Rectangle, state: &mut dyn Any) {

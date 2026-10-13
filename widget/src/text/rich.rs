@@ -3,7 +3,8 @@ use crate::core::keyboard;
 use crate::core::layout;
 use crate::core::mouse::{self, click};
 use crate::core::renderer;
-use crate::core::text::{ADVANCED_AUTO_SHAPING, Hit, Paragraph, Span};
+use crate::core::text::{ADVANCED_AUTO_SHAPING, Hit, Paragraph, Span, Target};
+use crate::core::widget::operation::{self, Operation};
 use crate::core::widget::text::{
     self, Alignment, Catalog, Ellipsis, LineHeight, Shaping, Style, StyleFn, Wrapping,
 };
@@ -12,6 +13,9 @@ use crate::core::{
     self, Color, Element, Event, Layout, Length, Pixels, Point, Rectangle, Shell, Size, Vector,
     Widget, clipboard,
 };
+
+/// The highlight under selected text when none is set.
+const DEFAULT_SELECTION_COLOR: Color = Color::from_rgba(0.3, 0.5, 0.9, 0.35);
 
 /// A bunch of [`Rich`] text.
 pub struct Rich<'a, Link, Message, Theme = crate::Theme, Renderer = crate::Renderer>
@@ -54,6 +58,8 @@ where
     paragraph_info: Option<(usize, usize)>,
     /// Letter spacing in pixels (applied to all spans)
     letter_spacing: Option<Pixels>,
+    /// Whether the runtime may select this text (see [`Rich::selectable`]).
+    selectable_text: bool,
 }
 
 impl<'a, Link, Message, Theme, Renderer> Rich<'a, Link, Message, Theme, Renderer>
@@ -89,6 +95,7 @@ where
             global_selecting: false,
             paragraph_info: None,
             letter_spacing: None,
+            selectable_text: false,
         }
     }
 
@@ -231,6 +238,19 @@ where
     /// (paragraph_index, total_paragraphs)
     pub fn paragraph_info(mut self, index: usize, total: usize) -> Self {
         self.paragraph_info = Some((index, total));
+        self
+    }
+
+    /// Lets the user select the [`Rich`] text and copy it, with no state kept
+    /// by the application.
+    ///
+    /// The runtime drives the selection: a drag that starts where no widget
+    /// takes the press selects across every selectable text it crosses, a
+    /// double or triple click takes a word or a line, shift-click extends,
+    /// and the copy shortcut copies. A click on a link still follows it. The
+    /// highlight takes [`Rich::selection_color`].
+    pub fn selectable(mut self, selectable: bool) -> Self {
+        self.selectable_text = selectable;
         self
     }
 
@@ -503,14 +523,32 @@ where
             }
         }
 
+        if self.selectable_text && !state.paragraph.selection().is_empty() {
+            let origin = layout.bounds().anchor(
+                state.paragraph.min_bounds(),
+                state.paragraph.align_x(),
+                state.paragraph.align_y(),
+            ) - Point::ORIGIN;
+
+            let color = self.selection_color.unwrap_or(DEFAULT_SELECTION_COLOR);
+
+            for region in state.paragraph.selection() {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: *region + origin,
+                        ..Default::default()
+                    },
+                    color,
+                );
+            }
+        }
+
         // Draw selection highlight
         if let Some((start, end)) = self.selection {
             let start = start.min(end);
             let end = start.max(end);
 
-            let selection_color = self
-                .selection_color
-                .unwrap_or(Color::from_rgba(0.3, 0.5, 0.9, 0.35));
+            let selection_color = self.selection_color.unwrap_or(DEFAULT_SELECTION_COLOR);
 
             // Use the same anchor calculation as text::draw to account for alignment
             let anchor = layout.bounds().anchor(
@@ -857,6 +895,37 @@ where
         }
     }
 
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        _renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        if !self.selectable_text {
+            return;
+        }
+
+        let state = tree
+            .state
+            .downcast_mut::<State<Link, Renderer::Paragraph>>();
+
+        let origin = layout.bounds().anchor(
+            state.paragraph.min_bounds(),
+            state.paragraph.align_x(),
+            state.paragraph.align_y(),
+        ) - Point::ORIGIN;
+
+        operation.selectable_text(
+            None,
+            layout.bounds(),
+            &mut Selecting {
+                paragraph: &mut state.paragraph,
+                origin,
+            },
+        );
+    }
+
     fn mouse_interaction(
         &self,
         _tree: &Tree,
@@ -867,7 +936,7 @@ where
     ) -> mouse::Interaction {
         if self.hovered_link.is_some() {
             mouse::Interaction::Pointer
-        } else if self.selectable && cursor.is_over(layout.bounds()) {
+        } else if (self.selectable || self.selectable_text) && cursor.is_over(layout.bounds()) {
             mouse::Interaction::Text
         } else {
             mouse::Interaction::None
@@ -1064,4 +1133,30 @@ fn find_word_bounds_in_spans<Link, Font>(
 /// Check if a byte is part of a "word" (alphanumeric or underscore).
 fn is_word_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// A [`Paragraph`] seen by the runtime's selection, whose points are in layout
+/// coordinates while the paragraph's start at its own origin.
+struct Selecting<'a, P> {
+    paragraph: &'a mut P,
+    origin: Vector,
+}
+
+impl<P: Paragraph> operation::Selectable for Selecting<'_, P> {
+    fn select(&mut self, start: Point, end: Point, target: Target) {
+        self.paragraph
+            .select(start - self.origin, end - self.origin, target);
+    }
+
+    fn select_all(&mut self) {
+        self.paragraph.select_all();
+    }
+
+    fn deselect(&mut self) {
+        self.paragraph.deselect();
+    }
+
+    fn copy(&mut self) -> Option<String> {
+        self.paragraph.copy()
+    }
 }

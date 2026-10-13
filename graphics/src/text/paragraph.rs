@@ -1,7 +1,9 @@
 //! Draw paragraphs.
 use crate::core;
 use crate::core::alignment;
-use crate::core::text::{Alignment, Ellipsis, Hit, LineHeight, Shaping, Span, Text, Wrapping};
+use crate::core::text::{
+    Alignment, Ellipsis, Hit, LineHeight, Shaping, Span, Target, Text, Wrapping,
+};
 use crate::core::{Font, Pixels, Point, Rectangle, Size};
 use crate::text;
 
@@ -28,6 +30,14 @@ struct Internal {
     hint: bool,
     hint_factor: f32,
     letter_spacing: Option<f32>,
+    selection: Option<Selection>,
+}
+
+#[derive(Clone)]
+struct Selection {
+    start: cosmic_text::Cursor,
+    end: cosmic_text::Cursor,
+    regions: Vec<Rectangle>,
 }
 
 impl Paragraph {
@@ -149,6 +159,7 @@ impl core::text::Paragraph for Paragraph {
             truncated,
             version: font_system.version(),
             letter_spacing: text.letter_spacing,
+            selection: None,
         }))
     }
 
@@ -260,6 +271,7 @@ impl core::text::Paragraph for Paragraph {
             truncated,
             version: font_system.version(),
             letter_spacing: text.letter_spacing,
+            selection: None,
         }))
     }
 
@@ -303,6 +315,16 @@ impl core::text::Paragraph for Paragraph {
             && (natural_min_bounds.width > new_bounds.width
                 || natural_min_bounds.height >= new_bounds.height
                 || natural_min_bounds != min_bounds);
+
+        // The cursors survive a re-wrap; where their lines fall does not.
+        if let Some(selection) = paragraph.selection.as_mut() {
+            selection.regions = regions(
+                &paragraph.buffer,
+                selection.start,
+                selection.end,
+                paragraph.hint_factor,
+            );
+        }
     }
 
     fn compare(&self, text: Text<()>) -> core::text::Difference {
@@ -384,6 +406,113 @@ impl core::text::Paragraph for Paragraph {
 
     fn is_truncated(&self) -> bool {
         self.internal().truncated
+    }
+
+    fn select(&mut self, start: Point, end: Point, target: Target) {
+        use cosmic_text::Edit;
+
+        let height = self.min_bounds().height;
+        let above = |point: Point| point.y < 0.0;
+        let below = |point: Point| point.y > height;
+
+        // A drag that passes wholly above or below this text selects none of it.
+        if (above(start) && above(end)) || (below(start) && below(end)) {
+            self.deselect();
+            return;
+        }
+
+        // Words and lines grow only around a start inside this text; one that
+        // began elsewhere takes everything up to its edge.
+        let target = if above(start) || below(start) {
+            Target::Character
+        } else {
+            target
+        };
+
+        let paragraph = Arc::make_mut(&mut self.0);
+        let hint_factor = paragraph.hint_factor;
+        let mut font_system = text::font_system().write().expect("Write font system");
+
+        let mut editor =
+            cosmic_text::Editor::new(cosmic_text::BufferRef::Borrowed(&mut paragraph.buffer));
+
+        let x = (start.x * hint_factor) as i32;
+        let y = (start.y * hint_factor) as i32;
+
+        editor.action(
+            font_system.raw(),
+            match target {
+                Target::Character => cosmic_text::Action::Click { x, y },
+                Target::Word => cosmic_text::Action::DoubleClick { x, y },
+                Target::Line => cosmic_text::Action::TripleClick { x, y },
+            },
+        );
+
+        editor.action(
+            font_system.raw(),
+            cosmic_text::Action::Drag {
+                x: (end.x * hint_factor) as i32,
+                y: (end.y * hint_factor) as i32,
+            },
+        );
+
+        let bounds = editor.selection_bounds();
+        drop(editor);
+
+        paragraph.selection = bounds.map(|(start, end)| Selection {
+            start,
+            end,
+            regions: regions(&paragraph.buffer, start, end, hint_factor),
+        });
+    }
+
+    fn select_all(&mut self) {
+        let paragraph = Arc::make_mut(&mut self.0);
+
+        let start = cosmic_text::Cursor::new(0, 0);
+        let end = cosmic_text::Cursor::new(
+            paragraph.buffer.lines.len().saturating_sub(1),
+            paragraph
+                .buffer
+                .lines
+                .last()
+                .map(|line| line.text().len())
+                .unwrap_or_default(),
+        );
+
+        paragraph.selection = Some(Selection {
+            start,
+            end,
+            regions: regions(&paragraph.buffer, start, end, paragraph.hint_factor),
+        });
+    }
+
+    fn deselect(&mut self) {
+        if self.internal().selection.is_some() {
+            Arc::make_mut(&mut self.0).selection = None;
+        }
+    }
+
+    fn selection(&self) -> &[Rectangle] {
+        self.internal()
+            .selection
+            .as_ref()
+            .map(|selection| selection.regions.as_slice())
+            .unwrap_or_default()
+    }
+
+    fn copy(&mut self) -> Option<String> {
+        use cosmic_text::Edit;
+
+        let paragraph = Arc::make_mut(&mut self.0);
+        let selection = paragraph.selection.clone()?;
+
+        let mut editor =
+            cosmic_text::Editor::new(cosmic_text::BufferRef::Borrowed(&mut paragraph.buffer));
+
+        editor.set_selection(cosmic_text::Selection::Normal(selection.start));
+        editor.set_cursor(selection.end);
+        editor.copy_selection()
     }
 
     fn hit_test(&self, point: Point) -> Option<Hit> {
@@ -630,6 +759,7 @@ impl Default for Internal {
             hint: false,
             hint_factor: 1.0,
             letter_spacing: None,
+            selection: None,
         }
     }
 }
@@ -660,4 +790,54 @@ impl PartialEq for Weak {
             _ => false,
         }
     }
+}
+
+/// The rectangles a selection between two cursors covers, one per visual line,
+/// in the paragraph's own (unhinted) coordinates. A line the selection runs
+/// past reaches to its end, so a multi-line selection reads as one block.
+fn regions(
+    buffer: &cosmic_text::Buffer,
+    start: cosmic_text::Cursor,
+    end: cosmic_text::Cursor,
+    hint_factor: f32,
+) -> Vec<Rectangle> {
+    let scroll = buffer.scroll();
+    let mut regions = Vec::new();
+
+    for run in buffer.layout_runs() {
+        if run.line_i < start.line || run.line_i > end.line {
+            continue;
+        }
+
+        let runs_on = end.line > run.line_i;
+        let line_break = run.line_height / 2.0;
+
+        let (min, max) = match run.highlight(start, end) {
+            Some((x, width)) => {
+                let (mut min, mut max) = (x, x + width);
+
+                if runs_on {
+                    if run.rtl {
+                        min = 0.0;
+                    } else {
+                        max = run.line_w + line_break;
+                    }
+                }
+
+                (min, max)
+            }
+            // An empty line inside the selection still shows a sliver.
+            None if run.glyphs.is_empty() && runs_on => (0.0, line_break),
+            None => continue,
+        };
+
+        regions.push(Rectangle {
+            x: (min - scroll.horizontal) / hint_factor,
+            y: run.line_top / hint_factor,
+            width: (max - min).max(0.0) / hint_factor,
+            height: run.line_height / hint_factor,
+        });
+    }
+
+    regions
 }

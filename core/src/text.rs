@@ -303,6 +303,19 @@ impl Hit {
     }
 }
 
+/// How far a text selection grows around the point where it starts: single
+/// characters, whole words (a double click), or whole lines (a triple click).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Target {
+    /// Selects individual characters.
+    #[default]
+    Character,
+    /// Selects whole words.
+    Word,
+    /// Selects whole lines.
+    Line,
+}
+
 /// The difference detected in some text.
 ///
 /// You will obtain a [`Difference`] when you [`compare`] a [`Paragraph`] with some

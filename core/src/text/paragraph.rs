@@ -1,7 +1,7 @@
 //! Draw paragraphs.
 use crate::alignment;
 use crate::text::{
-    Alignment, Difference, Ellipsis, Hit, LineHeight, Shaping, Span, Text, Wrapping,
+    Alignment, Difference, Ellipsis, Hit, LineHeight, Shaping, Span, Target, Text, Wrapping,
 };
 use crate::{Pixels, Point, Rectangle, Size};
 
@@ -95,6 +95,30 @@ pub trait Paragraph: Sized + Default {
     /// `true` when the full text would exceed the allocated bounds and the
     /// [`Ellipsis`] strategy caused visible truncation.
     fn is_truncated(&self) -> bool;
+
+    /// Selects the text between two positions relative to the origin of the
+    /// [`Paragraph`], as a drag from `start` to `end` would.
+    ///
+    /// The [`Target`] grows the selection around `start` to whole words or
+    /// lines. A paragraph that keeps no selection ignores this.
+    fn select(&mut self, _start: Point, _end: Point, _target: Target) {}
+
+    /// Selects all the text of the [`Paragraph`].
+    fn select_all(&mut self) {}
+
+    /// Clears the selection of the [`Paragraph`].
+    fn deselect(&mut self) {}
+
+    /// Returns the regions of the current selection, one per line, relative
+    /// to the origin of the [`Paragraph`].
+    fn selection(&self) -> &[Rectangle] {
+        &[]
+    }
+
+    /// Returns the selected text, if any.
+    fn copy(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// A [`Paragraph`] of plain text.
@@ -172,6 +196,11 @@ impl<P: Paragraph> Plain<P> {
     /// Returns the cached [`Paragraph`].
     pub fn raw(&self) -> &P {
         &self.raw
+    }
+
+    /// Returns the cached [`Paragraph`], mutably.
+    pub fn raw_mut(&mut self) -> &mut P {
+        &mut self.raw
     }
 
     /// Returns the current content of the plain [`Paragraph`].
