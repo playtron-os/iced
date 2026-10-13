@@ -386,11 +386,22 @@ pub fn align(
 
 /// Returns the attributes of the given [`Font`].
 pub fn to_attributes(font: Font) -> cosmic_text::Attrs<'static> {
-    cosmic_text::Attrs::new()
+    let attributes = cosmic_text::Attrs::new()
         .family(to_family(font.family))
         .weight(to_weight(font.weight))
         .stretch(to_stretch(font.stretch))
-        .style(to_style(font.style))
+        .style(to_style(font.style));
+
+    if font.features.is_empty() {
+        return attributes;
+    }
+
+    let mut features = cosmic_text::FontFeatures::new();
+    if font.features.contains(font::Features::TABULAR_FIGURES) {
+        let _ = features.enable(cosmic_text::FeatureTag::new(b"tnum"));
+    }
+
+    attributes.font_features(features)
 }
 
 /// Returns the attributes of the given [`Font`] with optional letter spacing.
@@ -424,7 +435,8 @@ pub fn with_letter_spacing(
         return attributes;
     }
 
-    let mut features = cosmic_text::FontFeatures::new();
+    // Keep the font's own features, such as tabular figures.
+    let mut features = attributes.font_features.clone();
     let _ = features
         .disable(cosmic_text::FeatureTag::STANDARD_LIGATURES)
         .disable(cosmic_text::FeatureTag::CONTEXTUAL_LIGATURES)
@@ -601,5 +613,70 @@ mod tests {
         assert_eq!(to_shaping_for_spans(Shaping::Basic, &curly), basic);
         assert_eq!(to_shaping(Shaping::Advanced, "Trash"), advanced);
         assert_eq!(to_shaping_for_spans(Shaping::Advanced, &plain), advanced);
+    }
+
+    fn feature(attributes: &cosmic_text::Attrs<'_>, tag: [u8; 4]) -> Option<u32> {
+        attributes
+            .font_features
+            .features
+            .iter()
+            .rev()
+            .find(|feature| *feature.tag.as_bytes() == tag)
+            .map(|feature| feature.value)
+    }
+
+    #[test]
+    fn tabular_figures_ask_the_font_for_tnum() {
+        assert_eq!(feature(&to_attributes(Font::DEFAULT), *b"tnum"), None);
+        assert_eq!(
+            feature(&to_attributes(Font::DEFAULT.tabular_figures()), *b"tnum"),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn letter_spacing_keeps_tabular_figures() {
+        let spaced = with_letter_spacing(to_attributes(Font::DEFAULT.tabular_figures()), 0.1);
+
+        assert_eq!(feature(&spaced, *b"tnum"), Some(1));
+        assert_eq!(feature(&spaced, *b"liga"), Some(0));
+    }
+
+    /// The advance of `text` alone in Fira Sans, shaped with `font`'s features.
+    #[cfg(feature = "fira-sans")]
+    fn advance(text: &str, font: Font) -> f32 {
+        let mut database = cosmic_text::fontdb::Database::new();
+        database.load_font_data(FIRA_SANS_REGULAR.to_vec());
+        database.set_sans_serif_family("Fira Sans");
+        let mut font_system =
+            cosmic_text::FontSystem::new_with_locale_and_db("en-US".into(), database);
+
+        let mut buffer =
+            cosmic_text::Buffer::new(&mut font_system, cosmic_text::Metrics::new(16.0, 20.0));
+        buffer.set_text(
+            &mut font_system,
+            text,
+            &to_attributes(font),
+            cosmic_text::Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut font_system, false);
+
+        buffer.layout_runs().map(|run| run.line_w).sum()
+    }
+
+    #[cfg(feature = "fira-sans")]
+    #[test]
+    fn tabular_figures_give_every_digit_one_width() {
+        let proportional = Font::DEFAULT;
+        let tabular = Font::DEFAULT.tabular_figures();
+
+        assert_ne!(
+            advance("1", proportional),
+            advance("0", proportional),
+            "Fira Sans figures are proportional by default"
+        );
+        assert_eq!(advance("1", tabular), advance("0", tabular));
+        assert_eq!(advance("1111", tabular), advance("8888", tabular));
     }
 }
