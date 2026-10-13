@@ -1,12 +1,15 @@
 //! Implement your own event loop to drive a user interface.
 use crate::core::event::{self, Event};
+use crate::core::keyboard;
 use crate::core::layout;
 use crate::core::mouse;
 use crate::core::overlay;
 use crate::core::renderer;
+use crate::core::text;
 use crate::core::widget;
+use crate::core::widget::operation::{self, Operation};
 use crate::core::window;
-use crate::core::{Clipboard, Element, InputMethod, Layout, Rectangle, Shell, Size, Vector};
+use crate::core::{Clipboard, Element, InputMethod, Layout, Point, Rectangle, Shell, Size, Vector};
 
 /// A set of interactive graphical elements with a specific [`Layout`].
 ///
@@ -26,6 +29,7 @@ pub struct UserInterface<'a, Message, Theme, Renderer> {
     state: widget::Tree,
     overlay: Option<Overlay>,
     bounds: Size,
+    selection: Selection,
 }
 
 struct Overlay {
@@ -96,7 +100,10 @@ where
     ) -> Self {
         let mut root = root.into();
 
-        let Cache { mut state } = cache;
+        let Cache {
+            mut state,
+            selection,
+        } = cache;
         state.diff(root.as_widget());
 
         let base = root.as_widget_mut().layout(
@@ -111,6 +118,7 @@ where
             state,
             overlay: None,
             bounds,
+            selection,
         }
     }
 
@@ -299,6 +307,12 @@ where
 
         drop(maybe_overlay);
 
+        // The latest drag to apply, kept apart from `self.selection.drag` so a
+        // release in the same batch as the last move doesn't drop it.
+        let mut reselect = None;
+        let mut select_all = false;
+        let mut publish_primary = false;
+
         let event_statuses = events
             .iter()
             .zip(overlay_statuses)
@@ -370,9 +384,105 @@ where
                     auto_focus_pending = true;
                 }
 
-                shell.event_status().merge(overlay_status)
+                let status = shell.event_status().merge(overlay_status);
+
+                // Text selection belongs to the runtime: it starts wherever no
+                // widget took the press, and crosses every selectable widget.
+                match event {
+                    Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+                        self.selection.modifiers = *modifiers;
+                    }
+                    Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                        if status == event::Status::Ignored =>
+                    {
+                        if let Some(position) = base_cursor.position() {
+                            let click = mouse::Click::new(
+                                position,
+                                mouse::Button::Left,
+                                self.selection.last_click,
+                            );
+
+                            let start = self
+                                .selection
+                                .anchor
+                                .filter(|_| {
+                                    self.selection.modifiers.shift()
+                                        && click.kind() == mouse::click::Kind::Single
+                                })
+                                .unwrap_or(position);
+
+                            self.selection.last_click = Some(click);
+                            self.selection.anchor = Some(start);
+                            self.selection.drag = Some((start, position));
+                            self.selection.target = match click.kind() {
+                                mouse::click::Kind::Single => text::Target::Character,
+                                mouse::click::Kind::Double => text::Target::Word,
+                                mouse::click::Kind::Triple => text::Target::Line,
+                            };
+                            reselect = self.selection.drag;
+                        }
+                    }
+                    Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                        if let Some((_, end)) = self.selection.drag.as_mut()
+                            && end != position
+                        {
+                            *end = *position;
+                            reselect = self.selection.drag;
+                        }
+                    }
+                    Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                        if self.selection.drag.take().is_some() =>
+                    {
+                        publish_primary = true;
+                    }
+                    Event::Keyboard(keyboard::Event::KeyPressed {
+                        key: keyboard::Key::Character(c),
+                        modifiers,
+                        repeat: false,
+                        ..
+                    }) if status == event::Status::Ignored
+                        && modifiers.command()
+                        && !modifiers.alt()
+                        && !modifiers.shift() =>
+                    {
+                        match c.as_str() {
+                            // A widget's own copy, such as an app-managed
+                            // selection's, wins.
+                            "c" if clipboard.write.is_none() => {
+                                if let Some(text) = self.copy_selection(renderer) {
+                                    clipboard.write =
+                                        Some(crate::core::clipboard::Content::Text(text));
+                                }
+                            }
+                            // Only once the selection has been used, so the
+                            // shortcut doesn't paint a window that never asked.
+                            "a" if self.selection.anchor.is_some() => select_all = true,
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+
+                status
             })
             .collect();
+
+        if let Some((start, end)) = reselect {
+            let mut select = operation::selection::select(start, end, self.selection.target);
+            self.operate(renderer, &mut select);
+            redraw_request = window::RedrawRequest::NextFrame;
+        }
+
+        if select_all {
+            self.operate(renderer, &mut operation::selection::select_all());
+            redraw_request = window::RedrawRequest::NextFrame;
+        }
+
+        if (publish_primary || select_all)
+            && let Some(text) = self.copy_selection(renderer)
+        {
+            clipboard.primary_write = Some(text);
+        }
 
         let mouse_interaction = if overlay_interaction == mouse::Interaction::None {
             self.root.as_widget().mouse_interaction(
@@ -587,10 +697,29 @@ where
         }
     }
 
+    /// The text selected across the selectable widgets, one line per widget.
+    fn copy_selection(&mut self, renderer: &Renderer) -> Option<String> {
+        let mut copy = operation::selection::copy();
+        self.operate(renderer, &mut operation::black_box(&mut copy));
+
+        match copy.finish() {
+            operation::Outcome::Some(text) => Some(text),
+            _ => None,
+        }
+    }
+
     /// Relayouts and returns a new  [`UserInterface`] using the provided
     /// bounds.
     pub fn relayout(self, bounds: Size, renderer: &mut Renderer) -> Self {
-        Self::build(self.root, bounds, Cache { state: self.state }, renderer)
+        Self::build(
+            self.root,
+            bounds,
+            Cache {
+                state: self.state,
+                selection: self.selection,
+            },
+            renderer,
+        )
     }
 
     /// Returns the size of the root content after layout.
@@ -604,7 +733,10 @@ where
     /// Extract the [`Cache`] of the [`UserInterface`], consuming it in the
     /// process.
     pub fn into_cache(self) -> Cache {
-        Cache { state: self.state }
+        Cache {
+            state: self.state,
+            selection: self.selection,
+        }
     }
 }
 
@@ -612,6 +744,19 @@ where
 #[derive(Debug)]
 pub struct Cache {
     state: widget::Tree,
+    selection: Selection,
+}
+
+/// The text selection the runtime drives across selectable widgets.
+#[derive(Debug, Clone, Copy, Default)]
+struct Selection {
+    last_click: Option<mouse::Click>,
+    /// Where the latest selection started, so a shift-click can extend it.
+    anchor: Option<Point>,
+    /// The drag in progress: where it started and where the cursor is now.
+    drag: Option<(Point, Point)>,
+    target: text::Target,
+    modifiers: keyboard::Modifiers,
 }
 
 impl Cache {
@@ -622,6 +767,7 @@ impl Cache {
     pub fn new() -> Cache {
         Cache {
             state: widget::Tree::empty(),
+            selection: Selection::default(),
         }
     }
 }

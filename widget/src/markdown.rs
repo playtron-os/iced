@@ -1056,6 +1056,10 @@ pub struct Settings {
     ///
     /// Defaults to `1`.
     pub rule_height: Pixels,
+    /// Whether the text can be selected and copied (see [`Rich::selectable`](crate::text::Rich::selectable)).
+    ///
+    /// Defaults to `false`.
+    pub selectable: bool,
 }
 
 impl Settings {
@@ -1088,6 +1092,7 @@ impl Settings {
             letter_spacing: None,
             line_height: None,
             rule_height: Pixels(1.0),
+            selectable: false,
         }
     }
 }
@@ -1500,6 +1505,8 @@ where
                 let on_e = on_end.clone();
 
                 rich_text(text.spans(settings.style))
+                    .selectable(settings.selectable)
+                    .selection_color(settings.style.selection_color)
                     .font(settings.style.font)
                     .size(settings.text_size)
                     .letter_spacing_maybe(settings.letter_spacing)
@@ -1532,6 +1539,8 @@ where
                 };
 
                 rich_text(text.spans(settings.style))
+                    .selectable(settings.selectable)
+                    .selection_color(settings.style.selection_color)
                     .font(settings.style.font)
                     .size(size)
                     .letter_spacing_maybe(settings.letter_spacing)
@@ -1590,6 +1599,8 @@ where
                 } else {
                     container(
                         rich_text(alt.spans(settings.style))
+                            .selectable(settings.selectable)
+                            .selection_color(settings.style.selection_color)
                             .font(settings.style.font)
                             .size(settings.text_size)
                             .letter_spacing_maybe(settings.letter_spacing)
@@ -1680,6 +1691,8 @@ where
                 let on_e = on_end.clone();
 
                 rich_text(text.spans(settings.style))
+                    .selectable(settings.selectable)
+                    .selection_color(settings.style.selection_color)
                     .on_link_click(V::on_link_click)
                     .font(settings.style.font)
                     .size(settings.text_size)
@@ -1713,6 +1726,8 @@ where
                 };
 
                 rich_text(text.spans(settings.style))
+                    .selectable(settings.selectable)
+                    .selection_color(settings.style.selection_color)
                     .on_link_click(V::on_link_click)
                     .font(settings.style.font)
                     .size(size)
@@ -1854,6 +1869,8 @@ where
             let on_l = on_link_click.clone();
 
             rich_text(line.spans(code_style))
+                .selectable(settings.selectable)
+                .selection_color(settings.style.selection_color)
                 .on_link_click_maybe(on_l)
                 .font(Font::MONOSPACE)
                 .size(settings.code_size)
@@ -1938,6 +1955,8 @@ where
                         let on_l = on_link_click.clone();
 
                         rich_text(text.spans(settings.style))
+                            .selectable(settings.selectable)
+                            .selection_color(settings.style.selection_color)
                             .on_link_click_maybe(on_l)
                             .font(settings.style.font)
                             .size(settings.text_size)
@@ -2023,6 +2042,8 @@ where
                 let on_l = on_link_click.clone();
 
                 rich_text(text.spans(settings.style))
+                    .selectable(settings.selectable)
+                    .selection_color(settings.style.selection_color)
                     .on_link_click_maybe(on_l)
                     .font(settings.style.font)
                     .size(settings.text_size)
@@ -2055,6 +2076,8 @@ where
                 };
 
                 rich_text(text.spans(settings.style))
+                    .selectable(settings.selectable)
+                    .selection_color(settings.style.selection_color)
                     .on_link_click_maybe(on_l)
                     .font(settings.style.font)
                     .size(size)
@@ -2309,6 +2332,8 @@ where
         Item::Paragraph(text) => {
             let selection = get_selection(idx);
             rich_text(text.spans(settings.style))
+                .selectable(settings.selectable)
+                .selection_color(settings.style.selection_color)
                 .on_link_click_maybe(on_link_click)
                 .font(settings.style.font)
                 .size(settings.text_size)
@@ -2333,6 +2358,8 @@ where
                 HeadingLevel::H4 | HeadingLevel::H5 | HeadingLevel::H6 => settings.text_size,
             };
             rich_text(text.spans(settings.style))
+                .selectable(settings.selectable)
+                .selection_color(settings.style.selection_color)
                 .on_link_click_maybe(on_link_click)
                 .font(settings.style.font)
                 .size(size)
@@ -2413,6 +2440,8 @@ where
 
     container(
         rich_text(text.spans(settings.style))
+            .selectable(settings.selectable)
+            .selection_color(settings.style.selection_color)
             .on_link_click(on_link_click)
             .size(match level {
                 pulldown_cmark::HeadingLevel::H1 => h1_size,
@@ -2446,6 +2475,8 @@ where
     Renderer: core::text::Renderer<Font = Font> + 'a,
 {
     rich_text(text.spans(settings.style))
+        .selectable(settings.selectable)
+        .selection_color(settings.style.selection_color)
         .size(settings.text_size)
         .letter_spacing_maybe(settings.letter_spacing)
         .line_height_maybe(settings.line_height)
@@ -2564,6 +2595,8 @@ where
         scrollable(
             container(column(lines.iter().map(|line| {
                 rich_text(line.spans(code_style))
+                    .selectable(settings.selectable)
+                    .selection_color(settings.style.selection_color)
                     .on_link_click(on_link_click.clone())
                     .font(settings.style.code_block_font)
                     .size(settings.code_size)
@@ -2714,6 +2747,8 @@ where
 
         container(
             rich_text(alt.spans(settings.style))
+                .selectable(settings.selectable)
+                .selection_color(settings.style.selection_color)
                 .on_link_click(Self::on_link_click)
                 .letter_spacing_maybe(settings.letter_spacing)
                 .line_height_maybe(settings.line_height)

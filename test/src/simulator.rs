@@ -29,6 +29,8 @@ pub struct Simulator<'a, Message, Theme = core::Theme, Renderer = renderer::Rend
     scale_factor: f32,
     cursor: mouse::Cursor,
     messages: Vec<Message>,
+    clipboard: Option<String>,
+    primary: Option<String>,
 }
 
 impl<'a, Message, Theme, Renderer> Simulator<'a, Message, Theme, Renderer>
@@ -93,6 +95,8 @@ where
             scale_factor: 2.0,
             cursor: mouse::Cursor::Unavailable,
             messages: Vec::new(),
+            clipboard: None,
+            primary: None,
         }
     }
 
@@ -192,11 +196,32 @@ where
     pub fn simulate(&mut self, events: impl IntoIterator<Item = Event>) -> Vec<event::Status> {
         let events: Vec<Event> = events.into_iter().collect();
 
-        let (_state, statuses) =
+        let (state, statuses) =
             self.raw
                 .update(&events, self.cursor, &mut self.renderer, &mut self.messages);
 
+        let (user_interface::State::Updated { clipboard, .. }
+        | user_interface::State::Outdated { clipboard, .. }) = state;
+
+        if let Some(core::clipboard::Content::Text(text)) = clipboard.write {
+            self.clipboard = Some(text);
+        }
+
+        if let Some(text) = clipboard.primary_write {
+            self.primary = Some(text);
+        }
+
         statuses
+    }
+
+    /// The text last written to the clipboard by the interface, if any.
+    pub fn clipboard(&self) -> Option<&str> {
+        self.clipboard.as_deref()
+    }
+
+    /// The text last published as the primary selection, if any.
+    pub fn primary_selection(&self) -> Option<&str> {
+        self.primary.as_deref()
     }
 
     /// Draws and takes a [`Snapshot`] of the interface in the [`Simulator`].
