@@ -12,6 +12,8 @@ pub struct Font {
     pub stretch: Stretch,
     /// The [`Style`] of the [`Font`].
     pub style: Style,
+    /// The OpenType [`Features`] the [`Font`] turns on.
+    pub features: Features,
 }
 
 impl Font {
@@ -21,6 +23,7 @@ impl Font {
         weight: Weight::Normal,
         stretch: Stretch::Normal,
         style: Style::Normal,
+        features: Features::NONE,
     };
 
     /// A monospaced font with normal [`Weight`].
@@ -36,6 +39,42 @@ impl Font {
             family: Family::Name(name),
             ..Self::DEFAULT
         }
+    }
+
+    /// Returns this [`Font`] with every figure the same width, so numbers
+    /// that change in place keep their columns (CSS `tabular-nums`).
+    pub const fn tabular_figures(self) -> Self {
+        Font {
+            features: self.features.union(Features::TABULAR_FIGURES),
+            ..self
+        }
+    }
+}
+
+/// A set of OpenType features a [`Font`] turns on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Features(u8);
+
+impl Features {
+    /// No features beyond the font's defaults.
+    pub const NONE: Self = Self(0);
+
+    /// Tabular figures (`tnum`): every digit takes the same advance.
+    pub const TABULAR_FIGURES: Self = Self(1);
+
+    /// Returns the features in either set.
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Returns whether every feature in `other` is in this set.
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Returns whether the set is empty.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
     }
 }
 
