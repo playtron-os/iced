@@ -3,7 +3,8 @@
 /// A window's commands and recent items, published as one catalog that
 /// replaces the last.
 ///
-/// On Kora the Halo lists them in its app menu and command palette.
+/// On Kora the Halo lists them in its command palette and shows quick settings on
+/// the window's header.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppCommands {
     /// Standard verbs the window answers itself (`undo`, `redo`, `cut`, `copy`,
@@ -35,6 +36,9 @@ pub struct AppCommand {
     pub stateful: bool,
     /// The window itself binds `keys`.
     pub bound: bool,
+    /// A stateful command shown as a toggle on the window's Halo, not only in
+    /// its palette. Ignored by shells without quick settings.
+    pub quick_setting: bool,
     /// Whether it can run right now.
     pub enabled: bool,
     /// Whether a stateful command is on.

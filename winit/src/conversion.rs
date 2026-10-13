@@ -351,6 +351,7 @@ pub fn app_commands(commands: window::AppCommands) -> winit::window::AppCommands
                 menu: command.menu,
                 stateful: command.stateful,
                 bound: command.bound,
+                quick_setting: command.quick_setting,
                 enabled: command.enabled,
                 active: command.active,
             })
@@ -1328,6 +1329,7 @@ mod app_command_tests {
                 menu: true,
                 stateful: true,
                 bound: true,
+                quick_setting: true,
                 enabled: false,
                 active: true,
             }],
@@ -1350,6 +1352,7 @@ mod app_command_tests {
             ("slate.zoom-in", "Ctrl+=", "View")
         );
         assert!(command.menu && command.stateful && command.bound && command.active);
+        assert!(command.quick_setting);
         assert!(!command.enabled);
         assert_eq!(converted.recents[0].timestamp_ms, 1 << 40);
         assert_eq!(converted.recents[0].sublabel, "Shots");
