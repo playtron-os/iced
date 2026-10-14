@@ -1,0 +1,26 @@
+name: Publish Kora crates
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: publish-kora
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pip install tomlkit
+      - run: python3 kora/stage.py . "$RUNNER_TEMP/kora"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: python3 -u kora/publish.py "$RUNNER_TEMP/kora"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
