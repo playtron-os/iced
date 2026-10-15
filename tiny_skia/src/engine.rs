@@ -553,8 +553,17 @@ impl Engine {
                     return;
                 };
 
-                // TODO: Border radius
                 adjust_clip_mask(_clip_mask, clip_bounds);
+
+                let radius = <[f32; 4]>::from(image.border_radius);
+                if radius.iter().any(|r| *r > 0.0) {
+                    _clip_mask.intersect_path(
+                        &rounded_rectangle(*bounds * _transformation, radius),
+                        tiny_skia::FillRule::EvenOdd,
+                        true,
+                        tiny_skia::Transform::identity(),
+                    );
+                }
 
                 let center = physical_bounds.center();
                 let radians = f32::from(image.rotation);
