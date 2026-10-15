@@ -36,7 +36,8 @@ def published(name, version):
 
 def retry_delay(output):
     """Seconds to wait when crates.io refused a publish for its rate limit, else None."""
-    if "429" not in output and "too many" not in output.lower():
+    # Only crates.io's own refusal: a build log can contain "429" anywhere.
+    if "status 429 Too Many Requests" not in output:
         return None
     match = re.search(r"try again after (.+? GMT)", output)
     if not match:

@@ -17,6 +17,8 @@ jobs:
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
+      # Verifying a crate builds it alone, without the workspace's dlopen features.
+      - run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libfontconfig1-dev
       - run: pip install tomlkit
       - run: python3 kora/stage.py . "$RUNNER_TEMP/kora"
         env:
