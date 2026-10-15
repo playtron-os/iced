@@ -7,6 +7,9 @@ concurrency:
   group: publish-kora
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
