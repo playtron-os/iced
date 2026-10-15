@@ -543,7 +543,119 @@ pub fn to_wrap(wrapping: Wrapping) -> cosmic_text::Wrap {
         Wrapping::Word => cosmic_text::Wrap::Word,
         Wrapping::Glyph => cosmic_text::Wrap::Glyph,
         Wrapping::WordOrGlyph => cosmic_text::Wrap::WordOrGlyph,
+        Wrapping::Balanced | Wrapping::Pretty => cosmic_text::Wrap::Word,
     }
+}
+
+/// The most lines [`Wrapping::Balanced`] balances, as browsers cap it.
+const BALANCE_MAX_LINES: usize = 6;
+
+/// Lays `buffer` out at the width its [`Wrapping`] asks for, given the widest
+/// it may be, and returns that width.
+///
+/// [`Wrapping::Balanced`] and [`Wrapping::Pretty`] may narrow it; every other
+/// strategy, and text with line breaks of its own, keeps `max_width`.
+pub fn fit_width(
+    buffer: &mut cosmic_text::Buffer,
+    font_system: &mut cosmic_text::FontSystem,
+    wrapping: Wrapping,
+    max_width: f32,
+) -> f32 {
+    if !matches!(wrapping, Wrapping::Balanced | Wrapping::Pretty)
+        || !max_width.is_finite()
+        || buffer.lines.len() != 1
+    {
+        return max_width;
+    }
+
+    let lines = buffer.layout_runs().count();
+
+    let width = match wrapping {
+        Wrapping::Balanced if (2..=BALANCE_MAX_LINES).contains(&lines) => {
+            narrowest(buffer, font_system, lines, max_width)
+        }
+        Wrapping::Pretty if lines >= 2 && ends_on_one_word(buffer) => {
+            pretty(buffer, font_system, lines, max_width)
+        }
+        _ => max_width,
+    };
+
+    buffer.set_size(font_system, Some(width), None);
+
+    width
+}
+
+/// The narrowest width, to a pixel, at which `buffer` still wraps into
+/// `lines` lines.
+fn narrowest(
+    buffer: &mut cosmic_text::Buffer,
+    font_system: &mut cosmic_text::FontSystem,
+    lines: usize,
+    max_width: f32,
+) -> f32 {
+    let (mut low, mut high) = (0.0, max_width);
+
+    while high - low > 1.0 {
+        let middle = (low + high) / 2.0;
+        buffer.set_size(font_system, Some(middle), None);
+
+        if buffer.layout_runs().count() <= lines {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+
+    high
+}
+
+/// The widest width at which `buffer` keeps `lines` lines and does not end
+/// on a single word, or `max_width` when no width does.
+fn pretty(
+    buffer: &mut cosmic_text::Buffer,
+    font_system: &mut cosmic_text::FontSystem,
+    lines: usize,
+    max_width: f32,
+) -> f32 {
+    let narrowest = narrowest(buffer, font_system, lines, max_width);
+    buffer.set_size(font_system, Some(narrowest), None);
+
+    if ends_on_one_word(buffer) {
+        return max_width;
+    }
+
+    let (mut low, mut high) = (narrowest, max_width);
+
+    while high - low > 1.0 {
+        let middle = (low + high) / 2.0;
+        buffer.set_size(font_system, Some(middle), None);
+
+        if ends_on_one_word(buffer) {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+
+    low
+}
+
+/// Whether the last line `buffer` wraps into holds a single word.
+fn ends_on_one_word(buffer: &cosmic_text::Buffer) -> bool {
+    let Some(run) = buffer.layout_runs().last() else {
+        return false;
+    };
+
+    let start = run.glyphs.iter().map(|glyph| glyph.start).min();
+    let end = run.glyphs.iter().map(|glyph| glyph.end).max();
+
+    let (Some(start), Some(end)) = (start, end) else {
+        return false;
+    };
+
+    run.text
+        .get(start..end)
+        .is_some_and(|text| text.split_whitespace().count() == 1)
 }
 
 /// Converts some [`Ellipsis`] strategy to a [`cosmic_text::Ellipsize`] strategy.
@@ -678,5 +790,110 @@ mod tests {
         );
         assert_eq!(advance("1", tabular), advance("0", tabular));
         assert_eq!(advance("1111", tabular), advance("8888", tabular));
+    }
+
+    /// `text` wrapped in Fira Sans as `wrapping` asks, no wider than
+    /// `max_width`: the width it chose and each line's words.
+    #[cfg(feature = "fira-sans")]
+    fn wrap(text: &str, wrapping: Wrapping, max_width: f32) -> (f32, Vec<String>) {
+        let mut database = cosmic_text::fontdb::Database::new();
+        database.load_font_data(FIRA_SANS_REGULAR.to_vec());
+        database.set_sans_serif_family("Fira Sans");
+        let mut font_system =
+            cosmic_text::FontSystem::new_with_locale_and_db("en-US".into(), database);
+
+        let mut buffer =
+            cosmic_text::Buffer::new(&mut font_system, cosmic_text::Metrics::new(16.0, 20.0));
+        buffer.set_wrap(&mut font_system, to_wrap(wrapping));
+        buffer.set_size(&mut font_system, Some(max_width), None);
+        buffer.set_text(
+            &mut font_system,
+            text,
+            &to_attributes(Font::DEFAULT),
+            cosmic_text::Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut font_system, false);
+
+        let width = fit_width(&mut buffer, &mut font_system, wrapping, max_width);
+        let lines = buffer
+            .layout_runs()
+            .map(|run| {
+                let start = run
+                    .glyphs
+                    .iter()
+                    .map(|glyph| glyph.start)
+                    .min()
+                    .unwrap_or(0);
+                let end = run.glyphs.iter().map(|glyph| glyph.end).max().unwrap_or(0);
+
+                run.text[start..end].trim().to_owned()
+            })
+            .collect();
+
+        (width, lines)
+    }
+
+    #[cfg(feature = "fira-sans")]
+    const HEADING: &str = "Turn a personal idea into a project.";
+
+    #[cfg(feature = "fira-sans")]
+    #[test]
+    fn balanced_lines_come_out_about_even() {
+        // Just too narrow for one line: a word wrap leaves the last word alone.
+        let max_width = advance(HEADING, Font::DEFAULT) - 1.0;
+
+        let (word_width, word) = wrap(HEADING, Wrapping::Word, max_width);
+        assert_eq!(word_width, max_width);
+        assert_eq!(word, ["Turn a personal idea into a", "project."]);
+
+        let (width, balanced) = wrap(HEADING, Wrapping::Balanced, max_width);
+        assert!(width < max_width * 0.6, "{width} of {max_width}");
+        assert_eq!(balanced, ["Turn a personal", "idea into a project."]);
+
+        let (_, narrower) = wrap(HEADING, Wrapping::Word, width - 2.0);
+        assert!(
+            narrower.len() > 2,
+            "{width} is the narrowest for two lines: {narrower:?}"
+        );
+    }
+
+    #[cfg(feature = "fira-sans")]
+    #[test]
+    fn pretty_text_does_not_end_on_one_word() {
+        let max_width = advance(HEADING, Font::DEFAULT) - 1.0;
+
+        let (width, pretty) = wrap(HEADING, Wrapping::Pretty, max_width);
+        assert!(width < max_width);
+        assert_eq!(pretty, ["Turn a personal idea into", "a project."]);
+    }
+
+    #[cfg(feature = "fira-sans")]
+    #[test]
+    fn text_that_already_reads_well_keeps_its_width() {
+        let width = advance("Turn a personal idea", Font::DEFAULT) + 4.0;
+
+        let (pretty_width, pretty) = wrap(HEADING, Wrapping::Pretty, width);
+        assert_eq!(pretty_width, width);
+        assert_eq!(pretty, ["Turn a personal idea", "into a project."]);
+
+        let one_line = advance(HEADING, Font::DEFAULT) + 4.0;
+        assert_eq!(wrap(HEADING, Wrapping::Balanced, one_line).0, one_line);
+        assert_eq!(wrap(HEADING, Wrapping::Pretty, one_line).0, one_line);
+    }
+
+    #[cfg(feature = "fira-sans")]
+    #[test]
+    fn long_or_broken_text_wraps_as_words() {
+        let long = HEADING.repeat(8);
+        let max_width = advance(HEADING, Font::DEFAULT);
+        let (width, lines) = wrap(&long, Wrapping::Balanced, max_width);
+        assert!(lines.len() > BALANCE_MAX_LINES);
+        assert_eq!(width, max_width);
+
+        let broken = "Turn a personal idea\ninto a project, then share it";
+        let max_width = advance("Turn a personal idea", Font::DEFAULT);
+        assert_eq!(wrap(broken, Wrapping::Balanced, max_width).0, max_width);
+        assert_eq!(wrap(broken, Wrapping::Pretty, max_width).0, max_width);
     }
 }
