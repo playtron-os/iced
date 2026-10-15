@@ -58,6 +58,15 @@ pub enum Event {
     /// A window was unfocused.
     Unfocused,
 
+    /// A window was hidden (`true`), or shown again (`false`): minimized,
+    /// say, or on a desktop that is not shown.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Wayland:** follows the compositor's `suspended` toplevel state.
+    /// - **Windows / Android:** not reported.
+    Occluded(bool),
+
     /// A file is being hovered over the window.
     ///
     /// When the user hovers multiple files at once, this event will be emitted
