@@ -298,6 +298,7 @@ pub fn window_event(
         } else {
             window::Event::Unfocused
         })),
+        WindowEvent::Occluded(occluded) => Some(Event::Window(window::Event::Occluded(occluded))),
         WindowEvent::HoveredFile(path) => {
             Some(Event::Window(window::Event::FileHovered(path.clone())))
         }
