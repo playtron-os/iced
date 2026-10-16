@@ -29,6 +29,8 @@ struct Internal {
     version: text::Version,
     hint: bool,
     hint_factor: f32,
+    /// The device scale the paragraph was laid out at, when the renderer knew it.
+    scale: Option<f32>,
     letter_spacing: Option<f32>,
     selection: Option<Selection>,
 }
@@ -49,6 +51,11 @@ impl Paragraph {
     /// Returns the buffer of the [`Paragraph`].
     pub fn buffer(&self) -> &cosmic_text::Buffer {
         &self.internal().buffer
+    }
+
+    /// The device scale the [`Paragraph`] was laid out at, when the renderer knew it.
+    pub fn layout_scale(&self) -> Option<f32> {
+        self.internal().scale
     }
 
     /// Creates a [`Weak`] reference to the [`Paragraph`].
@@ -155,6 +162,7 @@ impl core::text::Paragraph for Paragraph {
             buffer,
             hint,
             hint_factor,
+            scale: text.hint_factor,
             font: text.font,
             align_x: text.align_x,
             align_y: text.align_y,
@@ -274,6 +282,7 @@ impl core::text::Paragraph for Paragraph {
             buffer,
             hint,
             hint_factor,
+            scale: text.hint_factor,
             font: text.font,
             align_x: text.align_x,
             align_y: text.align_y,
@@ -365,6 +374,7 @@ impl core::text::Paragraph for Paragraph {
             || paragraph.letter_spacing != text.letter_spacing
             || paragraph.hint.then_some(paragraph.hint_factor)
                 != text::hint_factor(text.size, text.hint_factor)
+            || paragraph.scale != text.hint_factor
         {
             core::text::Difference::Shape
         } else if paragraph.bounds != text.bounds {
@@ -427,8 +437,14 @@ impl core::text::Paragraph for Paragraph {
     fn first_baseline(&self) -> Option<f32> {
         let internal = self.internal();
         let run = internal.buffer.layout_runs().next()?;
+        let top = run.line_top / internal.hint_factor;
 
-        Some(run.line_y / internal.hint_factor)
+        // Where the renderer draws it at this scale, so baselines line up to the pixel.
+        match internal.scale.filter(|scale| *scale > 0.0) {
+            Some(scale) => text::browser_baseline(&internal.buffer, scale / internal.hint_factor)
+                .map(|below| top + below / scale),
+            None => Some(run.line_y / internal.hint_factor),
+        }
     }
 
     fn is_truncated(&self) -> bool {
@@ -785,6 +801,7 @@ impl Default for Internal {
             version: text::Version::default(),
             hint: false,
             hint_factor: 1.0,
+            scale: None,
             letter_spacing: None,
             selection: None,
         }

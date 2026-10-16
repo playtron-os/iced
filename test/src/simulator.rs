@@ -21,6 +21,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// The scale a [`Simulator`] draws at unless told otherwise.
+const DEFAULT_SCALE_FACTOR: f32 = 2.0;
+
 /// A user interface that can be interacted with and inspected programmatically.
 pub struct Simulator<'a, Message, Theme = core::Theme, Renderer = renderer::Renderer> {
     raw: UserInterface<'a, Message, Theme, Renderer>,
@@ -81,6 +84,9 @@ where
             .expect("Create new headless renderer")
         };
 
+        // Text lays its baseline out for the scale it is drawn at.
+        renderer.hint(DEFAULT_SCALE_FACTOR);
+
         let raw = UserInterface::build(
             element,
             size,
@@ -92,7 +98,7 @@ where
             raw,
             renderer,
             size,
-            scale_factor: 2.0,
+            scale_factor: DEFAULT_SCALE_FACTOR,
             cursor: mouse::Cursor::Unavailable,
             messages: Vec::new(),
             clipboard: None,
@@ -104,6 +110,8 @@ where
     /// default.
     pub fn scale_factor(mut self, scale_factor: f32) -> Self {
         self.scale_factor = scale_factor;
+        self.renderer.hint(scale_factor);
+        self.raw = self.raw.relayout(self.size, &mut self.renderer);
         self
     }
 
