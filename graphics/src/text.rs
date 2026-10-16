@@ -358,17 +358,42 @@ pub fn measure(buffer: &cosmic_text::Buffer) -> (Size, bool) {
 }
 
 /// Moves a [`cosmic_text::Buffer`]'s physical `position` so its first baseline lands on
-/// a whole pixel, as browsers snap text.
+/// a whole device pixel, `scale` device pixels to a buffer unit.
 ///
-/// Renderers truncate the top and round the baseline's offset apart, so two texts
-/// sharing a baseline from different tops could land a pixel apart.
-pub fn snap_baseline(buffer: &cosmic_text::Buffer, position: Point, scale: f32) -> Point {
+/// A paragraph laid out at this scale (`browser`) takes the baseline the browser draws,
+/// [`browser_baseline`] below its top rounded to a pixel, as its layout expects. Other
+/// text rounds its own baseline once. Renderers truncate the top and round the
+/// baseline's offset apart, so the top moves to suit.
+pub fn snap_baseline(
+    buffer: &cosmic_text::Buffer,
+    position: Point,
+    scale: f32,
+    browser: bool,
+) -> Point {
     let Some(run) = buffer.layout_runs().next() else {
         return position;
     };
     let offset = run.line_y * scale;
+    let baseline = match browser_baseline(buffer, scale).filter(|_| browser) {
+        Some(below) => (position.y + run.line_top * scale + 1e-3).round() + below,
+        None => (position.y + offset).round(),
+    };
 
-    Point::new(position.x, (position.y + offset).round() - offset.round())
+    Point::new(position.x, baseline - offset.round())
+}
+
+/// How far below its line's top the browser draws a buffer's first baseline, in whole
+/// device pixels at `scale` device pixels to a buffer unit.
+///
+/// Blink rounds the ascent and descent to whole pixels at the device's font size, then
+/// splits the leading with the half above floored.
+pub fn browser_baseline(buffer: &cosmic_text::Buffer, scale: f32) -> Option<f32> {
+    let run = buffer.layout_runs().next()?;
+    let line = buffer.lines.first()?.layout_opt()?.first()?;
+    let ascent = (line.max_ascent * scale).round();
+    let descent = (line.max_descent * scale).round();
+
+    Some(ascent + ((run.line_height * scale - ascent - descent) / 2.0).floor())
 }
 
 /// Aligns the given [`cosmic_text::Buffer`] with the given [`Alignment`]

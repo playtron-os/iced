@@ -52,6 +52,8 @@ pub struct Renderer {
     group_pixmaps: Vec<tiny_skia::Pixmap>,
     pending_backdrop: bool,
     backdrop_layers: Vec<bool>,
+    /// The scale factor last hinted, so text lays out for the pixels it lands on.
+    scale_factor: Option<f32>,
 }
 
 impl Renderer {
@@ -65,6 +67,7 @@ impl Renderer {
             group_pixmaps: Vec::new(),
             pending_backdrop: false,
             backdrop_layers: Vec::new(),
+            scale_factor: None,
         }
     }
 
@@ -585,13 +588,13 @@ impl core::Renderer for Renderer {
         callback(Err(core::image::Error::Unsupported));
     }
 
-    fn hint(&mut self, _scale_factor: f32) {
-        // TODO: No hinting supported
-        // We'll replace `tiny-skia` with `vello_cpu` soon
+    fn hint(&mut self, scale_factor: f32) {
+        // No glyph hinting yet, but text still lays its baseline out for this scale.
+        self.scale_factor = Some(scale_factor);
     }
 
     fn scale_factor(&self) -> Option<f32> {
-        None
+        self.scale_factor
     }
 
     fn reset(&mut self, new_bounds: Rectangle) {

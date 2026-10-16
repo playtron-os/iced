@@ -60,6 +60,7 @@ impl Pipeline {
             pixels,
             clip_mask,
             transformation,
+            paragraph.layout_scale().is_some(),
         );
     }
 
@@ -87,6 +88,7 @@ impl Pipeline {
             pixels,
             clip_mask,
             transformation,
+            false,
         );
     }
 
@@ -152,6 +154,7 @@ impl Pipeline {
             pixels,
             clip_mask,
             transformation,
+            false,
         );
     }
 
@@ -175,6 +178,7 @@ impl Pipeline {
             pixels,
             clip_mask,
             transformation,
+            false,
         );
     }
 
@@ -193,9 +197,11 @@ fn draw(
     pixels: &mut tiny_skia::PixmapMut<'_>,
     clip_mask: Option<&tiny_skia::Mask>,
     transformation: Transformation,
+    browser: bool,
 ) {
     let scale = transformation.scale_factor();
-    let position = crate::graphics::text::snap_baseline(buffer, position * transformation, scale);
+    let position =
+        crate::graphics::text::snap_baseline(buffer, position * transformation, scale, browser);
 
     let mut swash = cosmic_text::SwashCache::new();
 
