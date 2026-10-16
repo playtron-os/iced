@@ -343,6 +343,17 @@ pub struct Packed {
     _padding: [u32; 3],
 }
 
+impl Packed {
+    /// Scales the alpha of every color stop by `factor`.
+    pub fn scale_alpha(&mut self, factor: f32) {
+        for color in &mut self.colors {
+            let blue = f16::from_bits((color[1] >> 16) as u16);
+            let alpha = f16::from_bits((color[1] & 0xFFFF) as u16);
+            color[1] = pack_f16s([blue, f16::from_f32(alpha.to_f32() * factor)]);
+        }
+    }
+}
+
 /// Creates a new [`Packed`] gradient for use in shader code.
 pub fn pack(gradient: &core::Gradient, bounds: Rectangle) -> Packed {
     match gradient {

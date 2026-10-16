@@ -83,3 +83,6 @@ x11rb = { version = "0.13", features = [
     "dri3",
     "randr",
 ], optional = true }
+
+[dev-dependencies]
+futures = { workspace = true, features = ["executor"] }

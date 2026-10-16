@@ -78,6 +78,17 @@ pub enum Text {
 }
 
 impl Text {
+    /// Scales the color's alpha by `opacity`, as an opacity group does to text
+    /// drawn inside it. Raw text keeps its color.
+    pub fn scale_opacity(&mut self, opacity: f32) {
+        match self {
+            Text::Paragraph { color, .. }
+            | Text::Editor { color, .. }
+            | Text::Cached { color, .. } => color.a *= opacity,
+            Text::Raw { .. } => {}
+        }
+    }
+
     /// Returns the visible bounds of the [`Text`].
     pub fn visible_bounds(&self) -> Option<Rectangle> {
         match self {

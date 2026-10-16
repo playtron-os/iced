@@ -26,6 +26,15 @@ pub enum Image {
 }
 
 impl Image {
+    /// Scales the image's opacity, as an opacity group does to images drawn
+    /// inside it.
+    pub fn scale_opacity(&mut self, opacity: f32) {
+        match self {
+            Image::Raster { image, .. } => image.opacity *= opacity,
+            Image::Vector { svg, .. } => svg.opacity *= opacity,
+        }
+    }
+
     /// Returns the bounds of the [`Image`].
     pub fn bounds(&self) -> Rectangle {
         match self {

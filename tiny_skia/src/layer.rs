@@ -16,6 +16,9 @@ pub struct Layer {
     /// When `Some`, the clip is rounded by these per-corner radii (in physical pixels).
     pub bounds_radius: Option<core::border::Radius>,
     pub backdrop: Option<(core::renderer::BackdropFilter, f32)>,
+    /// The opacity of the composited groups this layer is drawn in, multiplied;
+    /// kept so damage tracking sees a group fade.
+    pub group_opacity: f32,
     pub quads: Vec<(Quad, Background)>,
     pub primitives: Vec<Item<Primitive>>,
     pub images: Vec<Image>,
@@ -207,9 +210,71 @@ impl Layer {
         ));
     }
 
+    /// The area this layer draws on, as damage tracking measures it; `None`
+    /// when it draws nothing.
+    pub fn content_bounds(&self) -> Option<Rectangle> {
+        let layer_bounds = self.bounds.expand(1.0);
+
+        let quads = self.quads.iter().map(|(quad, _)| {
+            let bounds = quad.bounds.expand(1.0);
+            if quad.shadow.color.a > 0.0 {
+                bounds.expand(
+                    quad.shadow.offset.x.abs().max(quad.shadow.offset.y.abs())
+                        + crate::shadow::reach(&quad.shadow),
+                )
+            } else {
+                bounds
+            }
+        });
+
+        // Glyphs can overhang the laid out bounds by a little.
+        let text = self.text.iter().flat_map(|item| {
+            let transformation = item.transformation();
+            item.as_slice()
+                .iter()
+                .filter_map(Text::visible_bounds)
+                .map(move |bounds| (bounds * transformation).expand(2.0))
+                .collect::<Vec<_>>()
+        });
+
+        let primitives = self.primitives.iter().flat_map(|item| match item {
+            Item::Live(primitive) => vec![primitive.visible_bounds()],
+            Item::Group(primitives, group_bounds, transformation) => primitives
+                .iter()
+                .map(Primitive::visible_bounds)
+                .map(|bounds| bounds * *transformation)
+                .filter_map(|bounds| bounds.intersection(group_bounds))
+                .collect(),
+            Item::Cached(_primitives, bounds, _transformation) => vec![*bounds],
+        });
+
+        let images = self.images.iter().map(|image| image.bounds().expand(1.0));
+
+        let backdrop = self
+            .backdrop
+            .iter()
+            .map(|(filter, _)| filter.bounds.expand(1.0));
+
+        quads
+            .chain(text)
+            .chain(primitives)
+            .chain(images)
+            .chain(backdrop)
+            .filter_map(|bounds| bounds.intersection(&layer_bounds))
+            .reduce(|a, b| a.union(&b))
+    }
+
     pub fn damage(previous: &Self, current: &Self) -> Vec<Rectangle> {
         if previous.bounds != current.bounds {
             return vec![previous.bounds, current.bounds];
+        }
+
+        if previous.group_opacity != current.group_opacity {
+            return previous
+                .content_bounds()
+                .into_iter()
+                .chain(current.content_bounds())
+                .collect();
         }
 
         let layer_bounds = current.bounds.expand(1.0);
@@ -322,6 +387,7 @@ impl Default for Layer {
             bounds: Rectangle::INFINITE,
             bounds_radius: None,
             backdrop: None,
+            group_opacity: 1.0,
             quads: Vec::new(),
             primitives: Vec::new(),
             text: Vec::new(),
@@ -354,6 +420,7 @@ impl graphics::Layer for Layer {
         self.bounds_radius = None;
 
         self.backdrop = None;
+        self.group_opacity = 1.0;
         self.quads.clear();
         self.primitives.clear();
         self.text.clear();

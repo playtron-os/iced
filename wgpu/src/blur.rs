@@ -32,9 +32,9 @@ pub struct BackdropBlur {
     pub saturation: f32,
     /// Strength of the whole filter, 0.0–1.0.
     ///
-    /// Read from the renderer's opacity stack, so a region inside a
-    /// `with_opacity` group fades its backdrop blur along with everything else
-    /// instead of popping in at full strength. 1.0 = full (default).
+    /// Scaled by any `with_opacity` group around the region, so it fades its
+    /// backdrop blur along with everything else instead of popping in at full
+    /// strength. 1.0 = full (default).
     pub alpha: f32,
 }
 
@@ -938,6 +938,17 @@ pub struct State {
 }
 
 impl State {
+    /// Scales the strength of the blurs recorded inside the group that held
+    /// layers `start..end`. A blur records the layer count when it is drawn,
+    /// so one drawn inside the group has an index in `start + 1..=end`.
+    pub fn scale_regions(&mut self, start: usize, end: usize, opacity: f32) {
+        for region in &mut self.regions {
+            if (start + 1..=end).contains(&region.layer_index) {
+                region.blur.alpha *= opacity;
+            }
+        }
+    }
+
     /// Creates a new blur state.
     pub fn new() -> Self {
         Self::default()

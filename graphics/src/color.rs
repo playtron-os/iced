@@ -13,6 +13,12 @@ impl Packed {
     pub fn components(self) -> [f32; 4] {
         self.0
     }
+
+    /// Returns the color with its alpha scaled by `factor`.
+    pub fn scale_alpha(self, factor: f32) -> Self {
+        let [r, g, b, a] = self.0;
+        Self([r, g, b, a * factor])
+    }
 }
 
 /// A flag that indicates whether the renderer should perform gamma correction.
