@@ -288,6 +288,19 @@ pub struct Batch {
 type Order = Vec<(Kind, usize)>;
 
 impl Batch {
+    /// Scales the backgrounds and borders by `opacity`, as recording them
+    /// inside a scaled opacity group does.
+    pub fn scale_opacity(&mut self, opacity: f32) {
+        for solid in &mut self.solids {
+            solid.color = solid.color.scale_alpha(opacity);
+            solid.quad.border_color = solid.quad.border_color.scale_alpha(opacity);
+        }
+        for gradient in &mut self.gradients {
+            gradient.gradient.scale_alpha(opacity);
+            gradient.quad.border_color = gradient.quad.border_color.scale_alpha(opacity);
+        }
+    }
+
     /// Returns true if there are no quads of any type in [`Quads`].
     pub fn is_empty(&self) -> bool {
         self.solids.is_empty() && self.gradients.is_empty()
