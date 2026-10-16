@@ -194,8 +194,8 @@ fn draw(
     clip_mask: Option<&tiny_skia::Mask>,
     transformation: Transformation,
 ) {
-    let position = position * transformation;
     let scale = transformation.scale_factor();
+    let position = crate::graphics::text::snap_baseline(buffer, position * transformation, scale);
 
     let mut swash = cosmic_text::SwashCache::new();
 
