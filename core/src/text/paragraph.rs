@@ -90,6 +90,12 @@ pub trait Paragraph: Sized + Default {
         self.min_bounds().height
     }
 
+    /// Returns the distance from the top of the [`Paragraph`] to the baseline
+    /// of its first line, if it has one.
+    fn first_baseline(&self) -> Option<f32> {
+        None
+    }
+
     /// Returns whether the text was truncated by ellipsis.
     ///
     /// `true` when the full text would exceed the allocated bounds and the
@@ -191,6 +197,12 @@ impl<P: Paragraph> Plain<P> {
     /// Returns whether the text was truncated by ellipsis.
     pub fn is_truncated(&self) -> bool {
         self.raw.is_truncated()
+    }
+
+    /// Returns the distance from the top of the [`Paragraph`] to the baseline
+    /// of its first line, if it has one.
+    pub fn first_baseline(&self) -> Option<f32> {
+        self.raw.first_baseline()
     }
 
     /// Returns the cached [`Paragraph`].

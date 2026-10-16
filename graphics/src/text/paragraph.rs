@@ -424,6 +424,13 @@ impl core::text::Paragraph for Paragraph {
         self.internal().min_bounds
     }
 
+    fn first_baseline(&self) -> Option<f32> {
+        let internal = self.internal();
+        let run = internal.buffer.layout_runs().next()?;
+
+        Some(run.line_y / internal.hint_factor)
+    }
+
     fn is_truncated(&self) -> bool {
         self.internal().truncated
     }

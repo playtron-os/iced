@@ -20,7 +20,7 @@ use crate::Element;
 
 use crate::layout::{Limits, Node};
 use crate::widget;
-use crate::{Alignment, Length, Padding, Point, Size};
+use crate::{Alignment, Length, Padding, Point, Size, Vector};
 
 /// The main axis of a flex layout.
 #[derive(Debug)]
@@ -68,6 +68,68 @@ pub fn resolve<Message, Theme, Renderer>(
     padding: Padding,
     spacing: f32,
     align_items: Alignment,
+    items: &mut [Element<'_, Message, Theme, Renderer>],
+    trees: &mut [widget::Tree],
+) -> Node
+where
+    Renderer: crate::Renderer,
+{
+    resolve_with(
+        axis,
+        renderer,
+        limits,
+        width,
+        height,
+        padding,
+        spacing,
+        align_items,
+        false,
+        items,
+        trees,
+    )
+}
+
+/// Computes a horizontal flex layout like [`resolve`], placing the items so their
+/// first baselines line up, as CSS `align-items: baseline` does. An item with no
+/// baseline of its own aligns its bottom edge.
+pub fn resolve_baseline<Message, Theme, Renderer>(
+    renderer: &Renderer,
+    limits: &Limits,
+    width: Length,
+    height: Length,
+    padding: Padding,
+    spacing: f32,
+    items: &mut [Element<'_, Message, Theme, Renderer>],
+    trees: &mut [widget::Tree],
+) -> Node
+where
+    Renderer: crate::Renderer,
+{
+    resolve_with(
+        Axis::Horizontal,
+        renderer,
+        limits,
+        width,
+        height,
+        padding,
+        spacing,
+        Alignment::Start,
+        true,
+        items,
+        trees,
+    )
+}
+
+fn resolve_with<Message, Theme, Renderer>(
+    axis: Axis,
+    renderer: &Renderer,
+    limits: &Limits,
+    width: Length,
+    height: Length,
+    padding: Padding,
+    spacing: f32,
+    align_items: Alignment,
+    baseline: bool,
     items: &mut [Element<'_, Message, Theme, Renderer>],
     trees: &mut [widget::Tree],
 ) -> Node
@@ -353,6 +415,18 @@ where
     let pad = axis.pack(padding.left, padding.top);
     let mut main = pad.0;
 
+    // With baseline alignment, each item's first baseline (or its bottom edge)
+    // and the deepest of them, which the others line up with.
+    let baselines = baseline.then(|| {
+        let each: Vec<f32> = nodes
+            .iter()
+            .map(|node| node.baseline().unwrap_or(node.size().height))
+            .collect();
+        let deepest = each.iter().copied().fold(0.0, f32::max);
+
+        (each, deepest)
+    });
+
     // FIFTH PASS
     // We align all the laid out nodes in the cross axis, if needed.
     for (i, node) in nodes.iter_mut().enumerate() {
@@ -364,12 +438,19 @@ where
 
         node.move_to_mut(Point::new(x, y));
 
-        match axis {
-            Axis::Horizontal => {
-                node.align_mut(Alignment::Start, align_items, Size::new(0.0, cross));
-            }
-            Axis::Vertical => {
-                node.align_mut(align_items, Alignment::Start, Size::new(cross, 0.0));
+        if let Some((each, deepest)) = &baselines {
+            let offset = deepest - each[i];
+
+            node.translate_mut(Vector::new(0.0, offset));
+            cross = cross.max(offset + node.size().height);
+        } else {
+            match axis {
+                Axis::Horizontal => {
+                    node.align_mut(Alignment::Start, align_items, Size::new(0.0, cross));
+                }
+                Axis::Vertical => {
+                    node.align_mut(align_items, Alignment::Start, Size::new(cross, 0.0));
+                }
             }
         }
 
@@ -380,6 +461,7 @@ where
 
     let (intrinsic_width, intrinsic_height) = axis.pack(main - pad.0, cross);
     let size = limits.resolve(width, height, Size::new(intrinsic_width, intrinsic_height));
+    let row_baseline = baselines.map(|(_, deepest)| padding.top + deepest);
 
-    Node::with_children(size.expand(padding), nodes)
+    Node::with_children(size.expand(padding), nodes).with_baseline(row_baseline)
 }

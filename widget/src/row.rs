@@ -37,6 +37,7 @@ pub struct Row<'a, Message, Theme = crate::Theme, Renderer = crate::Renderer> {
     width: Length,
     height: Length,
     align: Alignment,
+    baseline: bool,
     clip: bool,
     children: Vec<Element<'a, Message, Theme, Renderer>>,
 }
@@ -78,6 +79,7 @@ where
             width: Length::Shrink,
             height: Length::Shrink,
             align: Alignment::Start,
+            baseline: false,
             clip: false,
             children,
         }
@@ -114,6 +116,14 @@ where
     /// Sets the vertical alignment of the contents of the [`Row`] .
     pub fn align_y(mut self, align: impl Into<alignment::Vertical>) -> Self {
         self.align = Alignment::from(align.into());
+        self.baseline = false;
+        self
+    }
+
+    /// Lines the contents of the [`Row`] up on their first baselines, as CSS
+    /// `align-items: baseline` does. A child with no text aligns its bottom edge.
+    pub fn align_baseline(mut self) -> Self {
+        self.baseline = true;
         self
     }
 
@@ -201,6 +211,19 @@ where
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
+        if self.baseline {
+            return layout::flex::resolve_baseline(
+                renderer,
+                limits,
+                self.width,
+                self.height,
+                self.padding,
+                self.spacing,
+                &mut self.children,
+                &mut tree.children,
+            );
+        }
+
         layout::flex::resolve(
             layout::flex::Axis::Horizontal,
             renderer,
