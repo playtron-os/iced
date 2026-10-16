@@ -632,6 +632,8 @@ fn prepare(
                 scale /= hint_factor;
             }
 
+            let position = crate::graphics::text::snap_baseline(buffer, position, scale);
+
             Some(cryoglyph::TextArea {
                 buffer,
                 left: position.x,

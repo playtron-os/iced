@@ -357,6 +357,20 @@ pub fn measure(buffer: &cosmic_text::Buffer) -> (Size, bool) {
     (Size::new(width, height), has_rtl)
 }
 
+/// Moves a [`cosmic_text::Buffer`]'s physical `position` so its first baseline lands on
+/// a whole pixel, as browsers snap text.
+///
+/// Renderers truncate the top and round the baseline's offset apart, so two texts
+/// sharing a baseline from different tops could land a pixel apart.
+pub fn snap_baseline(buffer: &cosmic_text::Buffer, position: Point, scale: f32) -> Point {
+    let Some(run) = buffer.layout_runs().next() else {
+        return position;
+    };
+    let offset = run.line_y * scale;
+
+    Point::new(position.x, (position.y + offset).round() - offset.round())
+}
+
 /// Aligns the given [`cosmic_text::Buffer`] with the given [`Alignment`]
 /// and returns its minimum [`Size`].
 pub fn align(

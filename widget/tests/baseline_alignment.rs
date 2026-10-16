@@ -90,6 +90,34 @@ fn a_padded_container_passes_its_texts_baseline_up() {
     assert_eq!(bottom_row(&mut ui, BIG), bottom_row(&mut ui, SMALL));
 }
 
+/// At a fractional scale each text's top lands between pixels in its own way, so the
+/// renderer must snap the baseline itself, not the top, or the two drift a pixel apart.
+#[test]
+fn baseline_aligned_text_stays_on_one_pixel_row_at_fractional_scales() {
+    if !measures_text() {
+        return;
+    }
+
+    for scale in [1.25, 1.5, 1.75] {
+        for nudge in [0.0, 0.25, 0.5, 0.75] {
+            let (big, small) = pair();
+            let line = row![big, small].spacing(8).align_baseline();
+            let mut ui = Simulator::with_size(
+                Settings::default(),
+                (400.0, 120.0),
+                container(line).padding(iced_widget::core::Padding::ZERO.top(nudge)),
+            )
+            .scale_factor(scale);
+
+            assert_eq!(
+                bottom_row(&mut ui, BIG),
+                bottom_row(&mut ui, SMALL),
+                "at {scale}x, {nudge} down"
+            );
+        }
+    }
+}
+
 #[test]
 fn centred_text_of_two_sizes_does_not() {
     if !measures_text() {
