@@ -5,6 +5,7 @@ use crate::{Alignment, Padding, Point, Rectangle, Size, Vector};
 pub struct Node {
     bounds: Rectangle,
     children: Vec<Node>,
+    baseline: Option<f32>,
 }
 
 impl Node {
@@ -23,6 +24,7 @@ impl Node {
                 height: size.height,
             },
             children,
+            baseline: None,
         }
     }
 
@@ -32,6 +34,24 @@ impl Node {
             child.bounds.size().expand(padding),
             vec![child.move_to(Point::new(padding.left, padding.top))],
         )
+    }
+
+    /// Sets the distance from the top of the [`Node`] to its first baseline,
+    /// as text does for its first line.
+    pub fn with_baseline(mut self, baseline: Option<f32>) -> Self {
+        self.baseline = baseline;
+        self
+    }
+
+    /// The distance from the top of the [`Node`] to its first baseline: its own,
+    /// or else the first one found among its children, depth first, as CSS
+    /// takes a box's first baseline from its content.
+    pub fn baseline(&self) -> Option<f32> {
+        self.baseline.or_else(|| {
+            self.children
+                .iter()
+                .find_map(|child| child.baseline().map(|baseline| child.bounds.y + baseline))
+        })
     }
 
     /// Returns the [`Size`] of the [`Node`].

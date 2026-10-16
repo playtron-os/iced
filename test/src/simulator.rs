@@ -277,6 +277,11 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// The pixels of the [`Snapshot`].
+    pub fn screenshot(&self) -> &window::Screenshot {
+        &self.screenshot
+    }
+
     /// Compares the [`Snapshot`] with the PNG image found in the given path, returning
     /// `true` if they are identical.
     ///

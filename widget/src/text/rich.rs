@@ -964,7 +964,7 @@ where
     Link: Clone,
     Renderer: core::text::Renderer,
 {
-    layout::sized(limits, width, height, |limits| {
+    let node = layout::sized(limits, width, height, |limits| {
         let bounds = limits.max();
 
         let size = size.unwrap_or_else(|| renderer.default_size());
@@ -1022,7 +1022,10 @@ where
         }
 
         state.paragraph.min_bounds()
-    })
+    });
+
+    let baseline = core::widget::text::baseline_in(&node, &state.paragraph);
+    node.with_baseline(baseline)
 }
 
 impl<'a, Link, Message, Theme, Renderer> FromIterator<Span<'a, Link, Renderer::Font>>

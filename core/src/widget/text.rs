@@ -335,7 +335,7 @@ pub fn layout<Renderer>(
 where
     Renderer: text::Renderer,
 {
-    layout::sized(limits, format.width, format.height, |limits| {
+    let node = layout::sized(limits, format.width, format.height, |limits| {
         let bounds = limits.max();
 
         let size = format.size.unwrap_or_else(|| renderer.default_size());
@@ -357,7 +357,24 @@ where
         });
 
         paragraph.min_bounds()
-    })
+    });
+
+    let baseline = baseline_in(&node, paragraph.raw());
+    node.with_baseline(baseline)
+}
+
+/// Where the first baseline of `paragraph` falls in `node`, which draws it
+/// anchored as [`draw`] does.
+pub fn baseline_in<P: Paragraph>(node: &layout::Node, paragraph: &P) -> Option<f32> {
+    let anchor = Rectangle::with_size(node.size()).anchor(
+        paragraph.min_bounds(),
+        paragraph.align_x(),
+        paragraph.align_y(),
+    );
+
+    paragraph
+        .first_baseline()
+        .map(|baseline| anchor.y + baseline)
 }
 
 /// Draws text using the same logic as the [`Text`] widget.
