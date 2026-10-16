@@ -123,13 +123,20 @@ impl core::text::Paragraph for Paragraph {
             None,
         );
 
+        let width = text::fit_width(
+            &mut buffer,
+            font_system.raw(),
+            text.wrapping,
+            text.bounds.width * hint_factor,
+        );
+
         let (natural_min_bounds, _) = text::measure(&buffer);
         let natural_min_bounds = natural_min_bounds / hint_factor;
 
         // Now restore height limit and set actual ellipsis, then re-measure
         buffer.set_size(
             font_system.raw(),
-            Some(text.bounds.width * hint_factor),
+            Some(width),
             Some(text.bounds.height * hint_factor),
         );
         buffer.set_ellipsize(
@@ -234,6 +241,13 @@ impl core::text::Paragraph for Paragraph {
             None,
         );
 
+        let width = text::fit_width(
+            &mut buffer,
+            font_system.raw(),
+            text.wrapping,
+            text.bounds.width * hint_factor,
+        );
+
         // Measure without ellipsis to get natural bounds (for truncation detection)
         let (natural_min_bounds, _) = text::measure(&buffer);
         let natural_min_bounds = natural_min_bounds / hint_factor;
@@ -241,7 +255,7 @@ impl core::text::Paragraph for Paragraph {
         // Restore height limit and apply ellipsis truncation
         buffer.set_size(
             font_system.raw(),
-            Some(text.bounds.width * hint_factor),
+            Some(width),
             Some(text.bounds.height * hint_factor),
         );
         buffer.set_ellipsize(
@@ -289,13 +303,19 @@ impl core::text::Paragraph for Paragraph {
             Some(new_bounds.width * paragraph.hint_factor),
             None,
         );
+        let width = text::fit_width(
+            &mut paragraph.buffer,
+            font_system.raw(),
+            paragraph.wrapping,
+            new_bounds.width * paragraph.hint_factor,
+        );
         let (natural_min_bounds, _) = text::measure(&paragraph.buffer);
         let natural_min_bounds = natural_min_bounds / paragraph.hint_factor;
 
         // Restore height limit and re-apply ellipsis
         paragraph.buffer.set_size(
             font_system.raw(),
-            Some(new_bounds.width * paragraph.hint_factor),
+            Some(width),
             Some(new_bounds.height * paragraph.hint_factor),
         );
         paragraph.buffer.set_ellipsize(
