@@ -158,6 +158,11 @@ impl<T: Layer> Stack<T> {
         &self.layers[..self.active_count]
     }
 
+    /// Returns the mutable slice of layers in the [`Stack`].
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.layers[..self.active_count]
+    }
+
     /// Returns the number of active layers in the [`Stack`].
     pub fn active_count(&self) -> usize {
         self.active_count
