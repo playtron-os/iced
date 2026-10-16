@@ -37,6 +37,7 @@ pub mod geometry;
 mod buffer;
 mod color;
 mod engine;
+mod group;
 mod quad;
 mod text;
 mod triangle;
@@ -85,12 +86,8 @@ pub struct Renderer {
     default_text_size: Pixels,
     layers: layer::Stack,
     scale_factor: Option<f32>,
-    /// Opacities that scale each primitive as it is recorded, for groups that
-    /// cannot be composited (see [`graphics::opacity`]).
-    opacity_stack: Vec<f32>,
     groups: graphics::opacity::Groups,
-    /// Offscreen targets for composited opacity groups, one per nesting depth.
-    group_targets: Vec<GroupTarget>,
+    group_pool: group::Pool,
 
     quad: quad::State,
     /// Quads rendered after text (e.g. strikethrough), kept in a separate
@@ -124,62 +121,14 @@ pub struct Renderer {
     staging_belt: wgpu::util::StagingBelt,
 }
 
-/// An offscreen texture a composited opacity group is drawn into.
-#[derive(Debug)]
-struct GroupTarget {
-    #[allow(dead_code)]
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    size: Size<u32>,
-}
-
-impl GroupTarget {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat, size: Size<u32>) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("iced_wgpu.opacity_group.texture"),
-            size: wgpu::Extent3d {
-                width: size.width.max(1),
-                height: size.height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        Self {
-            texture,
-            view,
-            size,
-        }
+/// What composites an opacity group onto the target below it.
+fn compositor<'a>(engine: &'a Engine, viewport: &'a Viewport) -> group::Compositor<'a> {
+    group::Compositor {
+        device: &engine.device,
+        format: engine.format,
+        pipeline: &engine.cached_draw_pipeline,
+        viewport,
     }
-}
-
-/// Begins a render pass on `view` that keeps what is already there.
-fn load_pass<'a>(
-    encoder: &'a mut wgpu::CommandEncoder,
-    view: &wgpu::TextureView,
-) -> wgpu::RenderPass<'a> {
-    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("iced_wgpu render pass"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    })
 }
 
 fn content_for_blur_region(
@@ -219,9 +168,8 @@ impl Renderer {
             default_text_size,
             layers: layer::Stack::new(),
             scale_factor: None,
-            opacity_stack: vec![1.0],
             groups: graphics::opacity::Groups::new(),
-            group_targets: Vec::new(),
+            group_pool: group::Pool::default(),
 
             quad: quad::State::new(),
             overlay_quad: quad::State::new(),
@@ -256,14 +204,8 @@ impl Renderer {
         }
     }
 
-    /// Returns the current combined opacity value from the opacity stack.
-    #[inline]
-    fn current_opacity(&self) -> f32 {
-        *self.opacity_stack.last().unwrap_or(&1.0)
-    }
-
-    /// Scales what record-time opacity scales, in a group that held an
-    /// offscreen effect and so could not be composited.
+    /// Scales each primitive of a group that held a backdrop and so could not
+    /// be composited.
     fn scale_group(&mut self, scaled: graphics::opacity::Scaled) {
         let layers = self.layers.as_mut_slice();
         let end = scaled.end.min(layers.len());
@@ -287,74 +229,6 @@ impl Renderer {
 
         self.blur_state
             .scale_regions(scaled.start, scaled.end, scaled.opacity);
-    }
-
-    /// Composites the innermost open group onto the target below it, once, at
-    /// the group's opacity, and returns that target.
-    fn close_group(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        frame: &wgpu::TextureView,
-        open_groups: &mut Vec<(graphics::opacity::Region, wgpu::TextureView)>,
-        viewport: &Viewport,
-    ) -> wgpu::TextureView {
-        let Some((region, view)) = open_groups.pop() else {
-            return frame.clone();
-        };
-        let below = open_groups
-            .last()
-            .map_or_else(|| frame.clone(), |(_, view)| view.clone());
-
-        self.engine.cached_draw_pipeline.render(
-            &self.engine.device,
-            encoder,
-            &view,
-            &below,
-            Rectangle::with_size(viewport.logical_size()),
-            region.opacity,
-            viewport,
-        );
-
-        below
-    }
-
-    /// The offscreen target for a composited group at `depth`, cleared.
-    fn group_target(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        depth: usize,
-        size: Size<u32>,
-    ) -> wgpu::TextureView {
-        while self.group_targets.len() <= depth {
-            self.group_targets.push(GroupTarget::new(
-                &self.engine.device,
-                self.engine.format,
-                size,
-            ));
-        }
-        if self.group_targets[depth].size != size {
-            self.group_targets[depth] =
-                GroupTarget::new(&self.engine.device, self.engine.format, size);
-        }
-
-        let view = self.group_targets[depth].view.clone();
-        let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("iced_wgpu.opacity_group.clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        view
     }
 
     #[allow(unused_variables)]
@@ -830,22 +704,12 @@ impl Renderer {
 
         // Composited opacity groups: each draws into its own texture, which
         // is composited once onto the target below it when the group ends.
-        let walk = graphics::opacity::Walk::new(self.groups.regions());
-        let mut open_groups: Vec<(graphics::opacity::Region, wgpu::TextureView)> = Vec::new();
+        let mut groups = group::Pass::new(self.groups.regions(), frame);
         let mut current = frame.clone();
 
         // Use index-based loop so we can call &mut self methods for gradient
         // fade compositing between layers without borrow conflicts.
         for layer_index in 0..layer_count {
-            while open_groups
-                .last()
-                .is_some_and(|(region, _)| region.end <= layer_index)
-            {
-                let _ = ManuallyDrop::into_inner(render_pass);
-                current = self.close_group(encoder, frame, &mut open_groups, viewport);
-                render_pass = ManuallyDrop::new(load_pass(encoder, &current));
-            }
-
             // Apply any gradient fade regions whose end_layer we've reached.
             // This ensures fade content is composited before layers that come
             // after it in the z-order (e.g. modal overlays).
@@ -912,12 +776,18 @@ impl Renderer {
                 }
             }
 
-            for region in walk.opening(layer_index) {
+            // An effect inside a group is applied above, onto the group, before
+            // the group is composited.
+            if groups.closes_at(layer_index) {
                 let _ = ManuallyDrop::into_inner(render_pass);
-                let view = self.group_target(encoder, open_groups.len(), viewport.physical_size());
-                open_groups.push((*region, view.clone()));
-                current = view;
-                render_pass = ManuallyDrop::new(load_pass(encoder, &current));
+                groups.close(
+                    layer_index,
+                    &mut self.group_pool,
+                    compositor(&self.engine, viewport),
+                    encoder,
+                );
+                current = groups.target().clone();
+                render_pass = ManuallyDrop::new(group::load_pass(encoder, &current));
             }
 
             let layer = &self.layers.as_slice()[layer_index];
@@ -997,6 +867,19 @@ impl Renderer {
                     }
                 }
                 continue;
+            }
+
+            // Groups inside an effect open in the pass that draws the effect.
+            if groups.opens_at(layer_index) {
+                let _ = ManuallyDrop::into_inner(render_pass);
+                groups.open(
+                    layer_index,
+                    &mut self.group_pool,
+                    compositor(&self.engine, viewport),
+                    encoder,
+                );
+                current = groups.target().clone();
+                render_pass = ManuallyDrop::new(group::load_pass(encoder, &current));
             }
 
             let Some(physical_bounds) =
@@ -1197,9 +1080,11 @@ impl Renderer {
 
         let _ = ManuallyDrop::into_inner(render_pass);
 
-        while !open_groups.is_empty() {
-            let _ = self.close_group(encoder, frame, &mut open_groups, viewport);
-        }
+        groups.finish(
+            &mut self.group_pool,
+            compositor(&self.engine, viewport),
+            encoder,
+        );
 
         // Apply any remaining gradient fade regions whose layers were at
         // the end of the stack (no later layers triggered inline application).
@@ -1655,6 +1540,9 @@ impl Renderer {
                 multiview_mask: None,
             }));
 
+        let mut groups = group::Pass::new(self.groups.regions(), frame);
+        let mut target = frame.clone();
+
         for (layer_index, layer) in self.layers.as_slice().iter().enumerate() {
             // Check if this layer is within any post-blur region
             let is_post_blur = !skip_layers.get(layer_index).copied().unwrap_or(false)
@@ -1688,6 +1576,18 @@ impl Renderer {
                     }
                 }
                 continue;
+            }
+
+            if groups.changes_at(layer_index) {
+                let _ = std::mem::ManuallyDrop::into_inner(render_pass);
+                groups.step(
+                    layer_index,
+                    &mut self.group_pool,
+                    compositor(&self.engine, viewport),
+                    encoder,
+                );
+                target = groups.target().clone();
+                render_pass = std::mem::ManuallyDrop::new(group::load_pass(encoder, &target));
             }
 
             log::trace!(
@@ -1738,7 +1638,7 @@ impl Renderer {
                 mesh_layer += self.triangle.render(
                     &self.engine.triangle_pipeline,
                     encoder,
-                    frame,
+                    &target,
                     mesh_layer,
                     &layer.triangles,
                     physical_bounds,
@@ -1749,7 +1649,7 @@ impl Renderer {
                     &wgpu::RenderPassDescriptor {
                         label: Some("iced_wgpu post-blur render pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: frame,
+                            view: &target,
                             depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
@@ -1835,16 +1735,19 @@ impl Renderer {
                     let _ = std::mem::ManuallyDrop::into_inner(render_pass);
 
                     for (instance, clip_bounds) in need_render {
-                        instance
-                            .primitive
-                            .render(&primitive_storage, encoder, frame, &clip_bounds);
+                        instance.primitive.render(
+                            &primitive_storage,
+                            encoder,
+                            &target,
+                            &clip_bounds,
+                        );
                     }
 
                     render_pass = std::mem::ManuallyDrop::new(encoder.begin_render_pass(
                         &wgpu::RenderPassDescriptor {
                             label: Some("iced_wgpu post-blur render pass"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: frame,
+                                view: &target,
                                 depth_slice: None,
                                 resolve_target: None,
                                 ops: wgpu::Operations {
@@ -1903,6 +1806,12 @@ impl Renderer {
 
         // Drop the render pass
         let _ = std::mem::ManuallyDrop::into_inner(render_pass);
+
+        groups.finish(
+            &mut self.group_pool,
+            compositor(&self.engine, viewport),
+            encoder,
+        );
     }
 
     /// Apply gradient fade effects by re-rendering regions with the gradient shader.
@@ -2045,7 +1954,31 @@ impl Renderer {
             #[cfg(any(feature = "svg", feature = "image"))]
             let mut image_layer = image_offset;
 
-            for layer in &layers_slice[start_idx..end_idx] {
+            let mut groups = group::Pass::new(self.groups.regions(), offscreen_view);
+
+            for (layer_index, layer) in layers_slice
+                .iter()
+                .enumerate()
+                .take(end_idx)
+                .skip(start_idx)
+            {
+                if groups.changes_at(layer_index) {
+                    let _ = ManuallyDrop::into_inner(render_pass);
+
+                    groups.finish(
+                        &mut self.group_pool,
+                        compositor(&self.engine, viewport),
+                        encoder,
+                    );
+                    groups.step(
+                        layer_index,
+                        &mut self.group_pool,
+                        compositor(&self.engine, viewport),
+                        encoder,
+                    );
+                    render_pass = ManuallyDrop::new(group::load_pass(encoder, groups.target()));
+                }
+
                 let Some(layer_physical_bounds) =
                     physical_bounds.intersection(&(layer.bounds * scale_factor))
                 else {
@@ -2229,7 +2162,31 @@ impl Renderer {
             #[cfg(any(feature = "svg", feature = "image"))]
             let mut image_layer = image_offset;
 
-            for layer in &layers_slice[start_idx..end_idx] {
+            let mut groups = group::Pass::new(self.groups.regions(), offscreen_view);
+
+            for (layer_index, layer) in layers_slice
+                .iter()
+                .enumerate()
+                .take(end_idx)
+                .skip(start_idx)
+            {
+                if groups.changes_at(layer_index) {
+                    let _ = ManuallyDrop::into_inner(render_pass);
+
+                    groups.finish(
+                        &mut self.group_pool,
+                        compositor(&self.engine, viewport),
+                        encoder,
+                    );
+                    groups.step(
+                        layer_index,
+                        &mut self.group_pool,
+                        compositor(&self.engine, viewport),
+                        encoder,
+                    );
+                    render_pass = ManuallyDrop::new(group::load_pass(encoder, groups.target()));
+                }
+
                 let Some(layer_physical_bounds) =
                     physical_bounds.intersection(&(layer.bounds * scale_factor))
                 else {
@@ -2439,7 +2396,26 @@ impl Renderer {
             #[cfg(any(feature = "svg", feature = "image"))]
             let mut image_layer = image_offset;
 
-            for layer in &layers_slice[start..end] {
+            let mut groups = group::Pass::new(self.groups.regions(), view);
+
+            for (layer_index, layer) in layers_slice.iter().enumerate().take(end).skip(start) {
+                if groups.changes_at(layer_index) {
+                    let _ = ManuallyDrop::into_inner(render_pass);
+
+                    groups.finish(
+                        &mut self.group_pool,
+                        compositor(&self.engine, viewport),
+                        encoder,
+                    );
+                    groups.step(
+                        layer_index,
+                        &mut self.group_pool,
+                        compositor(&self.engine, viewport),
+                        encoder,
+                    );
+                    render_pass = ManuallyDrop::new(group::load_pass(encoder, groups.target()));
+                }
+
                 let Some(layer_physical_bounds) =
                     physical_bounds.intersection(&(layer.bounds * scale_factor))
                 else {
@@ -2489,59 +2465,6 @@ impl Renderer {
     }
 }
 
-/// Applies opacity to a background, quad border, and shadow, returning the modified values.
-#[inline]
-fn apply_opacity(
-    opacity: f32,
-    background: impl Into<Background>,
-    quad: core::renderer::Quad,
-) -> (Background, core::renderer::Quad) {
-    if opacity >= 1.0 {
-        return (background.into(), quad);
-    }
-
-    let background = match background.into() {
-        Background::Color(mut color) => {
-            color.a *= opacity;
-            Background::Color(color)
-        }
-        Background::Gradient(mut gradient) => {
-            match &mut gradient {
-                core::Gradient::Linear(linear) => {
-                    for color_stop in linear.stops.iter_mut().flatten() {
-                        color_stop.color.a *= opacity;
-                    }
-                }
-                core::Gradient::Radial(radial) => {
-                    for color_stop in radial.stops.iter_mut().flatten() {
-                        color_stop.color.a *= opacity;
-                    }
-                }
-                core::Gradient::Conic(conic) => {
-                    for color_stop in conic.stops.iter_mut().flatten() {
-                        color_stop.color.a *= opacity;
-                    }
-                }
-            }
-            Background::Gradient(gradient)
-        }
-    };
-
-    let mut border = quad.border;
-    border.color.a *= opacity;
-
-    let mut shadow = quad.shadow;
-    shadow.color.a *= opacity;
-
-    let quad = core::renderer::Quad {
-        border,
-        shadow,
-        ..quad
-    };
-
-    (background, quad)
-}
-
 impl core::Renderer for Renderer {
     fn start_layer(&mut self, bounds: Rectangle) {
         self.layers.push_clip(bounds);
@@ -2564,9 +2487,8 @@ impl core::Renderer for Renderer {
     }
 
     fn fill_quad(&mut self, quad: core::renderer::Quad, background: impl Into<Background>) {
-        let (background, quad) = apply_opacity(self.current_opacity(), background, quad);
         let (layer, transformation) = self.layers.current_mut();
-        layer.draw_quad(quad, background, transformation);
+        layer.draw_quad(quad, background.into(), transformation);
     }
 
     fn allocate_image(
@@ -2595,8 +2517,6 @@ impl core::Renderer for Renderer {
 
     fn reset(&mut self, new_bounds: Rectangle) {
         self.layers.reset(new_bounds);
-        self.opacity_stack.clear();
-        self.opacity_stack.push(1.0);
         self.groups.clear();
         self.gradient_fade.clear();
         self.cached_scale_state.clear();
@@ -2607,10 +2527,6 @@ impl core::Renderer for Renderer {
     fn start_opacity(&mut self, _bounds: Rectangle, opacity: f32) {
         match self.groups.start(opacity) {
             graphics::opacity::Start::Pass => {}
-            graphics::opacity::Start::Scale(opacity) => {
-                let current = self.current_opacity();
-                self.opacity_stack.push(current * opacity);
-            }
             graphics::opacity::Start::Composite => {
                 self.layers.split();
                 self.groups.open(self.layers.active_count() - 1);
@@ -2621,11 +2537,6 @@ impl core::Renderer for Renderer {
     fn end_opacity(&mut self) {
         match self.groups.end() {
             graphics::opacity::End::Pass => {}
-            graphics::opacity::End::Unscale => {
-                if self.opacity_stack.len() > 1 {
-                    let _ = self.opacity_stack.pop();
-                }
-            }
             graphics::opacity::End::Close => {
                 self.layers.flush();
                 if let Some(scaled) = self.groups.close(self.layers.active_count()) {
@@ -2644,7 +2555,6 @@ impl core::Renderer for Renderer {
         fade_end: f32,
         overflow_margin: f32,
     ) {
-        self.groups.start_effect();
         // Flush current layer to ensure all prior content is committed
         self.layers.flush();
         let layer_count = self.layers.active_count();
@@ -2669,7 +2579,6 @@ impl core::Renderer for Renderer {
     }
 
     fn end_gradient_fade(&mut self) {
-        self.groups.end_effect();
         // Flush current layer to ensure all gradient fade content is committed
         self.layers.flush();
         let layer_count = self.layers.active_count();
@@ -2684,7 +2593,6 @@ impl core::Renderer for Renderer {
         display_scale: f32,
         blur_radius: f32,
     ) {
-        self.groups.start_effect();
         // Get the current transformation (e.g. scroll offset) BEFORE flushing
         // so we can transform bounds from content-space to screen-space.
         // The region must store screen-space bounds for correct offscreen
@@ -2736,7 +2644,6 @@ impl core::Renderer for Renderer {
     }
 
     fn end_cached_scale(&mut self) {
-        self.groups.end_effect();
         // Pop the render_scale transformation if one was pushed.
         // Check if the active region has a render_scale != 1.0.
         if self
@@ -2754,7 +2661,6 @@ impl core::Renderer for Renderer {
     }
 
     fn start_cached_draw(&mut self, key: u64, bounds: Rectangle) {
-        self.groups.start_effect();
         self.layers.flush();
         let layer_count = self.layers.active_count();
         self.cached_draw_state.start(key, bounds, layer_count);
@@ -2764,7 +2670,6 @@ impl core::Renderer for Renderer {
     }
 
     fn end_cached_draw(&mut self) {
-        self.groups.end_effect();
         // Pop the clip layer we pushed in start_cached_draw
         self.end_layer();
         self.layers.flush();
@@ -2773,7 +2678,6 @@ impl core::Renderer for Renderer {
     }
 
     fn draw_cached(&mut self, key: u64, bounds: Rectangle, opacity: f32) {
-        self.groups.mark_effect();
         // Record a composite request at the current layer position.
         // The actual compositing happens during the render phase.
         self.layers.flush();
@@ -2811,16 +2715,9 @@ impl core::Renderer for Renderer {
         fade_end: f32,
         saturation: f32,
     ) {
-        self.groups.mark_effect();
-        // Every other draw path scales itself by the opacity stack at record
-        // time; this one records a region the blur pipeline replays later, so
-        // it has to read the stack itself. Without this the frosted patch pops
-        // in at full strength on the first frame of a fade while the content
-        // above it ramps.
-        let opacity = self.current_opacity();
-        if opacity <= 0.001 {
-            return;
-        }
+        // A group around the blur is scaled rather than composited, and
+        // scales the region's strength when it ends (see `scale_group`).
+        self.groups.mark_backdrop();
 
         // Transform bounds from content-space to screen-space so the blur region
         // is placed correctly when drawn inside a with_translation/with_transformation.
@@ -2854,8 +2751,7 @@ impl core::Renderer for Renderer {
             fade_start,
             fade_end,
             saturation,
-        )
-        .with_alpha(opacity);
+        );
         self.blur_state.add_region(blur, layer_count);
 
         log::trace!(
@@ -2870,7 +2766,7 @@ impl core::Renderer for Renderer {
     }
 
     fn start_post_blur_layer(&mut self, bounds: Rectangle) {
-        self.groups.start_effect();
+        self.groups.mark_backdrop();
         // Transform bounds from content-space to screen-space
         let transformation = self.layers.transformation();
         let screen_bounds = bounds * transformation;
@@ -2918,7 +2814,6 @@ impl core::Renderer for Renderer {
     }
 
     fn end_post_blur_layer(&mut self) {
-        self.groups.end_effect();
         let current_layer = self.layers.active_count() - 1;
         log::trace!(
             "end_post_blur_layer: current_layer={}, will record end_layer={}",
@@ -2964,11 +2859,6 @@ impl core::text::Renderer for Renderer {
         color: Color,
         clip_bounds: Rectangle,
     ) {
-        let opacity = self.current_opacity();
-        let color = Color {
-            a: color.a * opacity,
-            ..color
-        };
         let (layer, transformation) = self.layers.current_mut();
 
         layer.draw_paragraph(text, position, color, clip_bounds, transformation);
@@ -2981,11 +2871,6 @@ impl core::text::Renderer for Renderer {
         color: Color,
         clip_bounds: Rectangle,
     ) {
-        let opacity = self.current_opacity();
-        let color = Color {
-            a: color.a * opacity,
-            ..color
-        };
         let (layer, transformation) = self.layers.current_mut();
         layer.draw_editor(editor, position, color, clip_bounds, transformation);
     }
@@ -2997,11 +2882,6 @@ impl core::text::Renderer for Renderer {
         color: Color,
         clip_bounds: Rectangle,
     ) {
-        let opacity = self.current_opacity();
-        let color = Color {
-            a: color.a * opacity,
-            ..color
-        };
         let (layer, transformation) = self.layers.current_mut();
         layer.draw_text(text, position, color, clip_bounds, transformation);
     }
@@ -3032,11 +2912,6 @@ impl core::image::Renderer for Renderer {
     }
 
     fn draw_image(&mut self, image: core::Image, bounds: Rectangle, clip_bounds: Rectangle) {
-        let opacity = self.current_opacity();
-        let image = core::Image {
-            opacity: image.opacity * opacity,
-            ..image
-        };
         let (layer, transformation) = self.layers.current_mut();
         layer.draw_raster(image, bounds, clip_bounds, transformation);
     }
@@ -3049,11 +2924,6 @@ impl core::svg::Renderer for Renderer {
     }
 
     fn draw_svg(&mut self, svg: core::Svg, bounds: Rectangle, clip_bounds: Rectangle) {
-        let opacity = self.current_opacity();
-        let svg = core::Svg {
-            opacity: svg.opacity * opacity,
-            ..svg
-        };
         let (layer, transformation) = self.layers.current_mut();
         layer.draw_svg(svg, bounds, clip_bounds, transformation);
     }

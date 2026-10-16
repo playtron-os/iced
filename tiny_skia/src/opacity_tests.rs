@@ -170,3 +170,40 @@ fn a_changing_fade_is_damage() {
     );
     assert!(!damage.is_empty());
 }
+
+#[test]
+fn a_group_inside_a_gradient_fade_is_composited() {
+    let mut renderer = renderer();
+    page(&mut renderer);
+    renderer.start_gradient_fade(Rectangle::INFINITE, 0, 0.9, 1.0, 0.0);
+    renderer.with_opacity(Rectangle::INFINITE, 0.5, button);
+    renderer.end_gradient_fade();
+    let pixels = render(&mut renderer);
+
+    let label = pixel(&pixels, 20, 10);
+    assert!(close(label, [128, 128, 255]), "label {label:?}");
+}
+
+#[test]
+fn a_group_over_a_backdrop_is_composited() {
+    let mut renderer = renderer();
+    page(&mut renderer);
+    renderer.draw_backdrop_filter(BackdropFilter {
+        bounds: Rectangle::new([0.0, 0.0].into(), Size::new(4.0, 4.0)),
+        radius: 2.0,
+        border_radius: [0.0; 4],
+        fade_direction: 0,
+        fade_start: 1.0,
+        fade_end: 1.0,
+        saturation: 1.0,
+        software: true,
+    });
+    renderer.start_post_blur_layer(Rectangle::INFINITE);
+    renderer.with_opacity(Rectangle::INFINITE, 0.5, button);
+    renderer.end_post_blur_layer();
+    let pixels = render(&mut renderer);
+
+    // A dialog's faded button: composited, as outside the dialog.
+    let label = pixel(&pixels, 20, 10);
+    assert!(close(label, [128, 128, 255]), "label {label:?}");
+}

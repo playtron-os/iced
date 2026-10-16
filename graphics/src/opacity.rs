@@ -4,9 +4,9 @@
 //! contents are drawn offscreen at full strength and composited once. So a
 //! faded label over a faded fill shows the label, not the fill through it.
 //!
-//! A group that holds or sits inside an offscreen effect (a backdrop blur, a
-//! gradient fade, a cached region) is not composited; its contents are scaled
-//! one by one instead, as before. Both renderers decide this here, so they
+//! A group that holds a backdrop blur, or a layer drawn over one, cannot be
+//! drawn offscreen, because the blur reads the finished frame. Its contents
+//! are scaled one by one instead. Both renderers decide this here, so they
 //! draw the same picture.
 
 /// A group composited offscreen: its layers, end exclusive, and its opacity.
@@ -25,8 +25,6 @@ pub struct Region {
 pub enum Start {
     /// Fully opaque: nothing to do.
     Pass,
-    /// Scale each primitive by this opacity as it is recorded.
-    Scale(f32),
     /// Start a fresh layer and report its index with [`Groups::open`].
     Composite,
 }
@@ -36,8 +34,6 @@ pub enum Start {
 pub enum End {
     /// Nothing to undo.
     Pass,
-    /// Undo the matching [`Start::Scale`].
-    Unscale,
     /// The group's layers end here; report the end with [`Groups::close`].
     Close,
 }
@@ -45,11 +41,10 @@ pub enum End {
 #[derive(Debug, Clone, Copy)]
 enum Open {
     Pass,
-    Scale,
     Composite {
         start: usize,
         opacity: f32,
-        effect: bool,
+        backdrop: bool,
     },
 }
 
@@ -57,12 +52,11 @@ enum Open {
 #[derive(Debug, Default)]
 pub struct Groups {
     open: Vec<Open>,
-    effects: usize,
     regions: Vec<Region>,
 }
 
-/// A group that holds an offscreen effect, so its recorded layers are scaled
-/// by its opacity instead of composited.
+/// A group that holds a backdrop, so its recorded layers are scaled by its
+/// opacity instead of composited.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Scaled {
     /// The first layer of the group.
@@ -88,15 +82,10 @@ impl Groups {
             return Start::Pass;
         }
 
-        if self.effects > 0 {
-            self.open.push(Open::Scale);
-            return Start::Scale(opacity);
-        }
-
         self.open.push(Open::Composite {
             start: usize::MAX,
             opacity,
-            effect: false,
+            backdrop: false,
         });
 
         Start::Composite
@@ -116,28 +105,24 @@ impl Groups {
                 let _ = self.open.pop();
                 End::Pass
             }
-            Some(Open::Scale) => {
-                let _ = self.open.pop();
-                End::Unscale
-            }
             Some(Open::Composite { .. }) => End::Close,
         }
     }
 
     /// Closes the group [`End::Close`] asked for, at the given end layer.
     ///
-    /// Returns the layers to scale when the group held an offscreen effect.
+    /// Returns the layers to scale when the group held a backdrop.
     pub fn close(&mut self, end: usize) -> Option<Scaled> {
         let Some(Open::Composite {
             start,
             opacity,
-            effect,
+            backdrop,
         }) = self.open.pop()
         else {
             return None;
         };
 
-        if effect {
+        if backdrop {
             return Some(Scaled {
                 start,
                 end,
@@ -156,23 +141,12 @@ impl Groups {
         None
     }
 
-    /// Starts an offscreen effect: a gradient fade, a cached region or a
-    /// layer drawn over a backdrop blur.
-    pub fn start_effect(&mut self) {
-        self.effects += 1;
-        self.mark_effect();
-    }
-
-    /// Ends the offscreen effect started last.
-    pub fn end_effect(&mut self) {
-        self.effects = self.effects.saturating_sub(1);
-    }
-
-    /// Records a one-off offscreen effect, such as a backdrop blur.
-    pub fn mark_effect(&mut self) {
+    /// Records a backdrop blur, or a layer drawn over one: every open group
+    /// holds it and is scaled instead of composited.
+    pub fn mark_backdrop(&mut self) {
         for open in &mut self.open {
-            if let Open::Composite { effect, .. } = open {
-                *effect = true;
+            if let Open::Composite { backdrop, .. } = open {
+                *backdrop = true;
             }
         }
     }
@@ -195,7 +169,6 @@ impl Groups {
     /// Forgets every group, for a new frame.
     pub fn clear(&mut self) {
         self.open.clear();
-        self.effects = 0;
         self.regions.clear();
     }
 }
@@ -260,11 +233,11 @@ mod tests {
     }
 
     #[test]
-    fn a_group_holding_a_blur_is_scaled_instead() {
+    fn a_group_holding_a_backdrop_is_scaled_instead() {
         let mut groups = Groups::new();
         assert_eq!(groups.start(0.5), Start::Composite);
         groups.open(2);
-        groups.mark_effect();
+        groups.mark_backdrop();
         assert_eq!(groups.end(), End::Close);
         assert_eq!(
             groups.close(4),
@@ -278,28 +251,21 @@ mod tests {
     }
 
     #[test]
-    fn a_group_inside_an_effect_is_scaled_as_it_is_recorded() {
-        let mut groups = Groups::new();
-        groups.start_effect();
-        assert_eq!(groups.start(0.5), Start::Scale(0.5));
-        assert_eq!(groups.end(), End::Unscale);
-        groups.end_effect();
-        assert_eq!(groups.start(0.5), Start::Composite);
-    }
-
-    #[test]
-    fn an_effect_inside_a_nested_group_scales_every_open_group() {
+    fn a_backdrop_scales_every_open_group_but_not_later_ones() {
         let mut groups = Groups::new();
         assert_eq!(groups.start(0.5), Start::Composite);
         groups.open(1);
         assert_eq!(groups.start(0.5), Start::Composite);
         groups.open(2);
-        groups.start_effect();
-        groups.end_effect();
+        groups.mark_backdrop();
         assert_eq!(groups.end(), End::Close);
         assert!(groups.close(3).is_some());
+        assert_eq!(groups.start(0.5), Start::Composite);
+        groups.open(4);
         assert_eq!(groups.end(), End::Close);
-        assert!(groups.close(4).is_some());
+        assert_eq!(groups.close(5), None);
+        assert_eq!(groups.end(), End::Close);
+        assert!(groups.close(6).is_some());
     }
 
     #[test]
