@@ -19,9 +19,12 @@ use crate::core::{Element, Event, Layout, Length, Rectangle, Shell, Size, Vector
 ///
 /// # Example
 /// ```no_run
+/// # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
+/// # #[derive(Clone)] enum MyMessage { CtrlEnterPressed }
+/// # let my_button: iced::Element<'_, MyMessage> = iced::widget::text("Send").into();
 /// use iced::widget::shortcut;
 ///
-/// let content = shortcut(my_button)
+/// let content: iced::Element<'_, MyMessage> = shortcut(my_button)
 ///     .on_key(
 ///         |key, modifiers| {
 ///             matches!(
@@ -30,7 +33,8 @@ use crate::core::{Element, Event, Layout, Length, Rectangle, Shell, Size, Vector
 ///             ) && modifiers.control()
 ///         },
 ///         MyMessage::CtrlEnterPressed,
-///     );
+///     )
+///     .into();
 /// ```
 pub struct Shortcut<'a, Message, Theme = crate::Theme, Renderer = crate::Renderer> {
     content: Element<'a, Message, Theme, Renderer>,

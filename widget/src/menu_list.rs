@@ -9,6 +9,7 @@
 //! *spatial* focus algorithm. Menus are linear, so they need their own.
 //!
 //! ```no_run
+//! # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 //! use iced::widget::{column, menu_list, text};
 //! use iced::Element;
 //!

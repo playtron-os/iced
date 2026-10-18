@@ -7,6 +7,7 @@
 //! nearby toggle due to more beam overlap).
 //!
 //! ```no_run
+//! # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 //! use iced::widget::{focus_order, toggler};
 //! use iced::Element;
 //!
@@ -172,6 +173,7 @@ where
 /// `u32::MAX`.
 ///
 /// ```no_run
+/// # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 /// use iced::widget::{focus_order, toggler};
 /// use iced::Element;
 ///

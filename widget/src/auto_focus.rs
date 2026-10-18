@@ -14,6 +14,7 @@
 //! widget detect the page change:
 //!
 //! ```no_run
+//! # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 //! use iced::widget::{auto_focus, text_input};
 //! use iced::Element;
 //!
@@ -286,6 +287,7 @@ where
 /// widget re-focuses when the page changes:
 ///
 /// ```no_run
+/// # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 /// use iced::widget::{auto_focus, text_input};
 /// use iced::Element;
 ///
