@@ -118,6 +118,47 @@ fn baseline_aligned_text_stays_on_one_pixel_row_at_fractional_scales() {
     }
 }
 
+/// A wrapped row lines each of its lines up on baselines, as a CSS flex line does,
+/// rather than falling back to its top edge.
+#[test]
+fn a_wrapped_row_puts_each_line_on_one_baseline() {
+    if !measures_text() {
+        return;
+    }
+
+    const BIG_2: Color = Color::from_rgb(0.0, 0.6, 0.0);
+    const SMALL_2: Color = Color::from_rgb(0.8, 0.0, 0.8);
+    // 70px apiece, so two share a 160px line and the third wraps.
+    // 20px rather than 13 for the small text: its stems are solid ink on both renderers.
+    let cell = |size, color| container(text(FLAT).size(size).color(color)).width(70);
+    let line: Element<'_, (), Theme, Renderer> = row![
+        cell(36, BIG),
+        cell(20, SMALL),
+        cell(20, SMALL_2),
+        cell(36, BIG_2),
+    ]
+    .spacing(8)
+    .align_baseline()
+    .wrap()
+    .into();
+    let mut ui = Simulator::with_size(Settings::default(), (160.0, 160.0), line).scale_factor(1.0);
+
+    assert_eq!(
+        bottom_row(&mut ui, BIG),
+        bottom_row(&mut ui, SMALL),
+        "first line"
+    );
+    assert_eq!(
+        bottom_row(&mut ui, SMALL_2),
+        bottom_row(&mut ui, BIG_2),
+        "second line"
+    );
+    assert!(
+        bottom_row(&mut ui, BIG_2) > bottom_row(&mut ui, BIG),
+        "two lines"
+    );
+}
+
 #[test]
 fn centred_text_of_two_sizes_does_not() {
     if !measures_text() {
