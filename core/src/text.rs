@@ -216,17 +216,18 @@ pub enum Wrapping {
     Glyph,
     /// Wraps at the word level, or fallback to glyph level if a word can't fit on a line by itself.
     WordOrGlyph,
-    /// Wraps at the word level, at the narrowest width that keeps the same
-    /// number of lines, so they come out about as long as each other.
+    /// Wraps at the word level, in as many lines as [`Wrapping::Word`] needs,
+    /// each about as long as the others.
     ///
-    /// Like CSS `text-wrap: balance`, for headings: text of more than six
-    /// lines, or with line breaks of its own, wraps as [`Wrapping::Word`].
+    /// Breaks as Chrome breaks CSS `text-wrap: balance`, for headings. Text of
+    /// more than six lines, with line breaks of its own, or with a word too
+    /// wide for its line wraps as [`Wrapping::Word`].
     Balanced,
-    /// Wraps at the word level, but never leaves one word alone on the last
-    /// line when narrowing the text pulls another down to it.
+    /// Wraps at the word level, but breaks the last lines of a paragraph again
+    /// when [`Wrapping::Word`] would leave one short word alone at its end.
     ///
-    /// Like CSS `text-wrap: pretty`, for body text. Text with line breaks of
-    /// its own wraps as [`Wrapping::Word`].
+    /// Breaks as Chrome breaks CSS `text-wrap: pretty`, for body text: only the
+    /// last four lines change, and never into more lines.
     Pretty,
 }
 
