@@ -49,6 +49,7 @@ fn filter(bounds: Rectangle) -> BackdropFilter {
         fade_end: 1.0,
         saturation: 1.0,
         software: true,
+        snap: false,
     }
 }
 

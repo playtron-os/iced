@@ -31,6 +31,8 @@ pub struct BackdropFilter {
     pub saturation: f32,
     /// Whether a software renderer may perform this filter.
     pub software: bool,
+    /// Whether the region's edges land on whole device pixels, as a snapped [`Quad`]'s do.
+    pub snap: bool,
 }
 
 /// A component that can be used by widgets to draw themselves on a screen.

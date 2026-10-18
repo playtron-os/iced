@@ -69,6 +69,7 @@ pub struct BackdropBlur<'a, Message, Theme = crate::Theme, Renderer = crate::Ren
     /// 1.0 = unchanged (default).
     saturation: f32,
     software: bool,
+    snap: bool,
     width: Length,
     height: Length,
 }
@@ -87,6 +88,7 @@ impl<'a, Message, Theme, Renderer> BackdropBlur<'a, Message, Theme, Renderer> {
             fade_end: 1.0,
             saturation: 1.0,
             software: false,
+            snap: false,
             width: Length::Shrink,
             height: Length::Shrink,
         }
@@ -97,6 +99,14 @@ impl<'a, Message, Theme, Renderer> BackdropBlur<'a, Message, Theme, Renderer> {
     #[must_use]
     pub fn software(mut self, enabled: bool) -> Self {
         self.software = enabled;
+        self
+    }
+
+    /// Puts the filtered region's edges on whole device pixels, as a snapped quad's are, so
+    /// it lines up with the snapped surface drawn over it.
+    #[must_use]
+    pub fn snap(mut self, snap: bool) -> Self {
+        self.snap = snap;
         self
     }
 
@@ -319,6 +329,7 @@ where
                 fade_end: self.fade_end,
                 saturation: self.saturation,
                 software: self.software,
+                snap: self.snap,
             });
 
             // Draw the content in a post-blur layer so it appears ON TOP of the blur

@@ -36,6 +36,8 @@ pub struct BackdropBlur {
     /// backdrop blur along with everything else instead of popping in at full
     /// strength. 1.0 = full (default).
     pub alpha: f32,
+    /// Whether the region's edges land on whole device pixels, as a snapped quad's do.
+    pub snap: bool,
 }
 
 /// A backdrop blur region with layer indices for tracking which layers to render.
@@ -59,6 +61,7 @@ impl BackdropBlur {
             fade_end: 1.0,
             saturation: 1.0,
             alpha: 1.0,
+            snap: false,
         }
     }
 
@@ -100,6 +103,25 @@ impl BackdropBlur {
             fade_end: fade_end.clamp(0.0, 1.0),
             saturation: saturation.max(0.0),
             alpha: 1.0,
+            snap: false,
+        }
+    }
+
+    /// Puts the region's edges on whole device pixels — see [`Self::snap`].
+    #[must_use]
+    pub fn snapped(mut self, snap: bool) -> Self {
+        self.snap = snap;
+        self
+    }
+
+    /// The region in device pixels at `scale_factor`.
+    pub fn physical_bounds(&self, scale_factor: f32) -> Rectangle {
+        let bounds = self.bounds * scale_factor;
+
+        if self.snap {
+            crate::graphics::snap_to_pixels(bounds)
+        } else {
+            bounds
         }
     }
 
@@ -622,7 +644,7 @@ impl Pipeline {
         let scale_factor = viewport.scale_factor();
 
         // Calculate normalized clip bounds (original widget bounds for SDF)
-        let bounds = blur.bounds * scale_factor;
+        let bounds = blur.physical_bounds(scale_factor);
         let clip_bounds = [
             bounds.x / physical_size.width as f32,
             bounds.y / physical_size.height as f32,
@@ -957,6 +979,13 @@ impl State {
     /// Adds a blur region.
     pub fn add_region(&mut self, blur: BackdropBlur, layer_index: usize) {
         self.regions.push(BlurRegion { blur, layer_index });
+    }
+
+    /// Puts the region added last on whole device pixels — see [`BackdropBlur::snap`].
+    pub fn snap_last(&mut self) {
+        if let Some(region) = self.regions.last_mut() {
+            region.blur.snap = true;
+        }
     }
 
     /// Takes all pending regions, clearing the state.
@@ -1428,6 +1457,37 @@ mod tests {
 
         assert!((blur.with_alpha(2.0).alpha - 1.0).abs() < f32::EPSILON);
         assert!(blur.with_alpha(-1.0).alpha.abs() < f32::EPSILON);
+    }
+
+    /// A snapped region covers the device pixels a snapped quad at the same bounds does,
+    /// so a blur under a crisp surface doesn't show half a pixel past its edge.
+    #[test]
+    fn a_snapped_region_lands_on_whole_device_pixels() {
+        let bounds = Rectangle {
+            x: 10.25,
+            y: 4.5,
+            width: 100.5,
+            height: 31.75,
+        };
+
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let snapped = BackdropBlur::new(bounds, 10.0)
+                .snapped(true)
+                .physical_bounds(scale);
+            let quad = crate::graphics::snap_to_pixels(bounds * scale);
+            assert_eq!(snapped, quad, "at {scale}x");
+            for edge in [
+                snapped.x,
+                snapped.y,
+                snapped.x + snapped.width,
+                snapped.y + snapped.height,
+            ] {
+                assert!((edge - edge.round()).abs() < 1e-4, "{edge} at {scale}x");
+            }
+        }
+
+        let free = BackdropBlur::new(bounds, 10.0).physical_bounds(1.5);
+        assert_eq!(free, bounds * 1.5, "an unsnapped region keeps its bounds");
     }
 }
 
