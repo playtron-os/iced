@@ -406,7 +406,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     if max_border_width > 0.0 {
         // Where inner and outer edges coincide (0-width sides), both coverages
         // cancel out, producing no border artifact.
-        mixed_color = mix(mixed_color, input.border_color, border_fraction(dist, padding_dist) * dash);
+        mixed_color = border_over(mixed_color, input.border_color, border_fraction(dist, padding_dist) * dash);
     }
 
     let quad_alpha = edge_coverage(dist);

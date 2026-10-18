@@ -436,7 +436,7 @@ fn gradient_fs_main(input: GradientVertexOutput) -> @location(0) vec4<f32> {
     }
 
     if (border_width > 0.0) {
-        mixed_color = mix(
+        mixed_color = border_over(
             mixed_color,
             border_color,
             clamp(0.5 + dist + border_width, 0.0, 1.0)

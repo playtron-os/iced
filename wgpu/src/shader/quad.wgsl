@@ -80,6 +80,12 @@ fn inset_shadow_over(fill: vec4<f32>, shadow: vec4<f32>, band: f32) -> vec4<f32>
     return fill + (shadow - fill * shadow.a) * band;
 }
 
+// The fill with the border painted over it, as CSS paints a border over its
+// background; `coverage` is the border's share of the quad's coverage.
+fn border_over(fill: vec4<f32>, border: vec4<f32>, coverage: f32) -> vec4<f32> {
+    return fill + (border - fill * border.a) * coverage;
+}
+
 // The standard normal CDF, from Abramowitz and Stegun's erf 7.1.26 (error < 1.5e-7).
 fn normal_cdf(x: f32) -> f32 {
     let z = abs(x) * 0.70710678;
