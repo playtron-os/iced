@@ -1345,10 +1345,7 @@ impl Selection {
 
     /// Recompute per-element ranges from anchor/focus.
     fn update_ranges(&mut self) {
-        // Clear all
-        for range in &mut self.ranges {
-            *range = None;
-        }
+        self.ranges.fill(None);
 
         let Some((anchor_elem, anchor_off)) = self.anchor else {
             return;

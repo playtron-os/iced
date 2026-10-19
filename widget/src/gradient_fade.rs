@@ -6,6 +6,7 @@
 //!
 //! # Example
 //! ```no_run
+//! # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 //! use iced::widget::{gradient_fade, scrollable, text, FadeEdge};
 //! use iced::Element;
 //!
@@ -22,6 +23,7 @@
 //! # Custom Stops
 //! For more control, you can specify exact fade positions:
 //! ```no_run
+//! # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 //! use iced::widget::{gradient_fade, scrollable, text, FadeEdge};
 //! use iced::Element;
 //!
@@ -69,6 +71,7 @@ pub enum FadeEdge {
 ///
 /// # Example
 /// ```no_run
+/// # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 /// use iced::widget::{gradient_fade, container, text};
 /// use iced::Element;
 ///
@@ -458,6 +461,7 @@ where
 ///
 /// # Example
 /// ```no_run
+/// # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 /// use iced::widget::{gradient_fade, scrollable, text, FadeEdge};
 /// use iced::Element;
 ///

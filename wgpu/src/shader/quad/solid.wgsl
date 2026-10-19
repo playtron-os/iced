@@ -143,7 +143,7 @@ fn solid_fs_main(
 
         // Where inner and outer edges coincide (0-width sides), both coverages
         // cancel out, producing no border artifact.
-        mixed_color = mix(fill, input.border_color, border_fraction(dist, padding_dist) * dash);
+        mixed_color = border_over(fill, input.border_color, border_fraction(dist, padding_dist) * dash);
     }
 
     let quad_alpha = edge_coverage(dist);

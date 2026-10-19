@@ -244,8 +244,10 @@ mod tests {
         match info.color_type {
             png::ColorType::Rgba => pixels,
             png::ColorType::Rgb => pixels
-                .chunks_exact(3)
-                .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], u8::MAX])
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|&[r, g, b]| [r, g, b, u8::MAX])
                 .collect(),
             other => panic!("{} is {other:?}, not RGB(A)", path.display()),
         }

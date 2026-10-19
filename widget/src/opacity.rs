@@ -17,6 +17,7 @@ use crate::core::{Element, Event, Length, Rectangle, Shell, Size, Vector, Widget
 ///
 /// # Example
 /// ```no_run
+/// # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 /// use iced::widget::{opacity, container, text};
 /// use iced::Element;
 ///
@@ -199,6 +200,7 @@ where
 ///
 /// # Example
 /// ```no_run
+/// # mod iced { pub mod widget { pub use iced_widget::*; } pub use iced_widget::core::*; pub type Element<'a, Message> = iced_widget::core::Element<'a, Message, iced_widget::Theme, iced_widget::Renderer>; }
 /// use iced::widget::{opacity, text};
 /// use iced::Element;
 ///
