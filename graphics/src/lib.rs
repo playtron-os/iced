@@ -43,3 +43,17 @@ pub use viewport::Viewport;
 
 pub use iced_core as core;
 pub use iced_futures as futures;
+
+/// `bounds` in device pixels, with each edge rounded to a whole pixel as a snapped quad's
+/// are, so surfaces snapped apart still line up.
+pub fn snap_to_pixels(bounds: core::Rectangle) -> core::Rectangle {
+    let edge = |value: f32| (value + 0.001).round();
+    let (x, y) = (edge(bounds.x), edge(bounds.y));
+
+    core::Rectangle {
+        x,
+        y,
+        width: edge(bounds.x + bounds.width) - x,
+        height: edge(bounds.y + bounds.height) - y,
+    }
+}

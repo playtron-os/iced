@@ -141,6 +141,7 @@ fn a_group_holding_a_backdrop_scales_each_primitive() {
             fade_end: 1.0,
             saturation: 1.0,
             software: true,
+            snap: false,
         });
         button(renderer);
     });
@@ -197,6 +198,7 @@ fn a_group_over_a_backdrop_is_composited() {
         fade_end: 1.0,
         saturation: 1.0,
         software: true,
+        snap: false,
     });
     renderer.start_post_blur_layer(Rectangle::INFINITE);
     renderer.with_opacity(Rectangle::INFINITE, 0.5, button);

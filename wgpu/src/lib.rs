@@ -2753,6 +2753,22 @@ impl core::Renderer for Renderer {
         );
     }
 
+    fn draw_backdrop_filter(&mut self, filter: core::renderer::BackdropFilter) {
+        self.draw_backdrop_blur_with_fade(
+            filter.bounds,
+            filter.radius,
+            filter.border_radius,
+            filter.fade_direction,
+            filter.fade_start,
+            filter.fade_end,
+            filter.saturation,
+        );
+
+        if filter.snap {
+            self.blur_state.snap_last();
+        }
+    }
+
     fn draw_backdrop_blur_with_fade(
         &mut self,
         bounds: Rectangle,

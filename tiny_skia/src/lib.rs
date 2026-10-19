@@ -469,6 +469,9 @@ impl core::Renderer for Renderer {
         let transformation = self.layers.transformation();
         let scale = transformation.scale_factor();
         filter.bounds = filter.bounds * transformation;
+        if filter.snap {
+            filter.bounds = graphics::snap_to_pixels(filter.bounds);
+        }
         filter.radius *= scale;
         filter.border_radius = filter.border_radius.map(|radius| radius * scale);
         self.split_layer();
