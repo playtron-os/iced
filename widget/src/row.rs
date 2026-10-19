@@ -122,6 +122,7 @@ where
 
     /// Lines the contents of the [`Row`] up on their first baselines, as CSS
     /// `align-items: baseline` does. A child with no text aligns its bottom edge.
+    /// A [`wrap`](Self::wrap)ped row does it line by line.
     pub fn align_baseline(mut self) -> Self {
         self.baseline = true;
         self
@@ -448,6 +449,25 @@ where
             }
         };
 
+        // On baselines, each line lines its items up as `Row::align_baseline` does and
+        // grows to hold them, as a CSS flex line does; the first line's is the row's own.
+        let baseline = self.row.baseline;
+        let top = self.row.padding.top;
+        let mut first_baseline = None;
+        let mut finish_line =
+            |line: std::ops::Range<usize>, row_height: f32, children: &mut Vec<layout::Node>| {
+                if !baseline {
+                    align_y(line, row_height, children);
+                    return row_height;
+                }
+
+                let (height, deepest) = align_baselines(&mut children[line.clone()]);
+                if line.start == 0 {
+                    first_baseline = Some(top + deepest);
+                }
+                height
+            };
+
         for (i, child) in self.row.children.iter_mut().enumerate() {
             let node = child
                 .as_widget_mut()
@@ -458,9 +478,9 @@ where
             if x != 0.0 && x + child_size.width > max_width {
                 intrinsic_size.width = intrinsic_size.width.max(x - spacing);
 
-                align_y(row_start..i, row_height, &mut children);
+                let line_height = finish_line(row_start..i, row_height, &mut children);
 
-                y += row_height + vertical_spacing;
+                y += line_height + vertical_spacing;
                 x = 0.0;
                 row_start = i;
                 row_height = 0.0;
@@ -477,8 +497,8 @@ where
             intrinsic_size.width = intrinsic_size.width.max(x - spacing);
         }
 
-        intrinsic_size.height = y + row_height;
-        align_y(row_start..children.len(), row_height, &mut children);
+        intrinsic_size.height =
+            y + finish_line(row_start..children.len(), row_height, &mut children);
 
         let align_factor = match self.align_x {
             alignment::Horizontal::Left => 0.0,
@@ -515,6 +535,7 @@ where
         let size = limits.resolve(self.row.width, self.row.height, intrinsic_size);
 
         layout::Node::with_children(size.expand(self.row.padding), children)
+            .with_baseline(first_baseline)
     }
 
     fn operate(
@@ -578,6 +599,22 @@ where
         self.row
             .overlay(tree, layout, renderer, viewport, translation)
     }
+}
+
+/// Lines `line` up on its items' first baselines (an item without one, on its bottom
+/// edge), returning the line's height and its baseline below the line's top.
+fn align_baselines(line: &mut [layout::Node]) -> (f32, f32) {
+    let baseline_of = |node: &layout::Node| node.baseline().unwrap_or(node.size().height);
+    let deepest = line.iter().map(baseline_of).fold(0.0, f32::max);
+    let mut height: f32 = 0.0;
+
+    for node in line {
+        let offset = deepest - baseline_of(node);
+        node.translate_mut(Vector::new(0.0, offset));
+        height = height.max(offset + node.size().height);
+    }
+
+    (height, deepest)
 }
 
 impl<'a, Message, Theme, Renderer> From<Wrapping<'a, Message, Theme, Renderer>>
