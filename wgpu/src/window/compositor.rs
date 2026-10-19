@@ -495,7 +495,7 @@ impl graphics::Compositor for Compositor {
             if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
                 usage |= wgpu::TextureUsages::COPY_SRC;
             } else {
-                log::warn!("Surface does not support COPY_SRC; backdrop blur will be unavailable");
+                log::debug!("Surface does not support COPY_SRC; backdrop blur is drawn offscreen");
             }
         }
 

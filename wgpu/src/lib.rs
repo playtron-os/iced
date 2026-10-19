@@ -51,6 +51,8 @@ mod image;
 mod image;
 
 #[cfg(test)]
+mod blur_tests;
+#[cfg(test)]
 mod opacity_tests;
 
 use buffer::Buffer;
@@ -264,10 +266,18 @@ impl Renderer {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // Native path: render to swapchain (gradient fades applied inline
-            // at the correct z-position during render), then blur
-            self.render(&mut encoder, target, clear_color, viewport);
-            self.apply_backdrop_blurs(&mut encoder, target, target_texture, viewport);
+            // A frame that cannot be a copy source (any GL surface) is blurred
+            // offscreen, as on WebGL; copying from it is a validation error.
+            let copyable = target_texture
+                .is_some_and(|texture| texture.usage().contains(wgpu::TextureUsages::COPY_SRC));
+            if self.blur_state.has_regions() && !copyable {
+                self.draw_with_offscreen_blur(&mut encoder, target, clear_color, viewport);
+            } else {
+                // Render to the swapchain (gradient fades applied inline at
+                // the correct z-position during render), then blur.
+                self.render(&mut encoder, target, clear_color, viewport);
+                self.apply_backdrop_blurs(&mut encoder, target, target_texture, viewport);
+            }
         }
 
         // Process gradient fade regions after main render (WASM no-blur path only;
@@ -330,6 +340,18 @@ impl Renderer {
     ///
     /// Returns RGBA bytes of the texture data.
     pub fn screenshot(&mut self, viewport: &Viewport, background_color: Color) -> Vec<u8> {
+        self.screenshot_from(viewport, background_color, wgpu::TextureUsages::COPY_SRC)
+    }
+
+    /// [`screenshot`](Self::screenshot), drawn into a frame with `frame_usage`
+    /// on top of what drawing needs. A frame without COPY_SRC is what a GL
+    /// surface hands out; it is read back by drawing it into one that has it.
+    fn screenshot_from(
+        &mut self,
+        viewport: &Viewport,
+        background_color: Color,
+        frame_usage: wgpu::TextureUsages,
+    ) -> Vec<u8> {
         #[derive(Clone, Copy, Debug)]
         struct BufferDimensions {
             width: u32,
@@ -371,14 +393,39 @@ impl Renderer {
             dimension: wgpu::TextureDimension::D2,
             format: self.engine.format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | frame_usage,
             view_formats: &[],
         });
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = self.draw(Some(background_color), &view, Some(&texture), viewport);
+
+        let texture = if texture.usage().contains(wgpu::TextureUsages::COPY_SRC) {
+            texture
+        } else {
+            let readable = self.engine.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("iced_wgpu.offscreen.readable_texture"),
+                size: texture_extent,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.engine.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            self.engine.blur_pipeline.blit_full(
+                &self.engine.device,
+                &mut encoder,
+                &view,
+                &readable.create_view(&wgpu::TextureViewDescriptor::default()),
+                viewport.physical_size(),
+            );
+            readable
+        };
 
         let texture = crate::color::convert(
             &self.engine.device,
@@ -1297,12 +1344,11 @@ impl Renderer {
         );
     }
 
-    /// WASM-specific: Draw with offscreen blur support.
+    /// Draw with offscreen blur support, for a frame that cannot be copied from.
     ///
-    /// On WASM/WebGL, we can't copy from the swapchain (no COPY_SRC support).
-    /// Instead, we render background content to an offscreen texture first,
-    /// apply blur from that, then render to the swapchain.
-    #[cfg(target_arch = "wasm32")]
+    /// WebGL and native GL surfaces have no COPY_SRC, so the background
+    /// content is rendered to an offscreen texture first, blurred from that,
+    /// then drawn to the swapchain.
     fn draw_with_offscreen_blur(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1333,12 +1379,14 @@ impl Renderer {
         let regions = self.blur_state.take_regions();
         let post_blur_content = self.blur_state.take_post_blur_content();
 
-        // Include gradient fades in the source sampled by every blur region.
         let scene_view = self
             .blur_cache
             .get_scene_copy_texture()
             .unwrap()
             .create_view(&wgpu::TextureViewDescriptor::default());
+        // Include gradient fades in the source sampled by every blur region.
+        // Natively, `render` has already drawn them inline.
+        #[cfg(target_arch = "wasm32")]
         self.apply_gradient_fades(encoder, &scene_view, viewport);
 
         match regions.as_slice() {
