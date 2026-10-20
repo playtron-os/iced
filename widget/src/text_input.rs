@@ -513,6 +513,7 @@ where
                 input_method::Purpose::Normal
             },
             preedit: state.preedit.as_ref().map(input_method::Preedit::as_ref),
+            surrounding: (!self.is_secure).then(|| surrounding(value, &state.cursor)),
         }
     }
 
@@ -2022,6 +2023,21 @@ fn offset<P: text::Paragraph>(text_bounds: Rectangle, value: &Value, state: &Sta
         offset
     } else {
         0.0
+    }
+}
+
+/// The text of `value`, with the byte offsets of the caret and of the
+/// selection's other end.
+fn surrounding(value: &Value, cursor: &Cursor) -> input_method::Surrounding {
+    let (caret, anchor) = match cursor.state(value) {
+        cursor::State::Index(index) => (index, index),
+        cursor::State::Selection { start, end } => (end, start),
+    };
+
+    input_method::Surrounding {
+        text: value.to_string(),
+        cursor: value.byte_offset(caret),
+        anchor: value.byte_offset(anchor),
     }
 }
 

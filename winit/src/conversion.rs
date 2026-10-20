@@ -1212,6 +1212,18 @@ pub fn ime_purpose(purpose: input_method::Purpose) -> winit::window::ImePurpose 
     }
 }
 
+/// Converts the text around an input method's cursor from `iced` to `winit`.
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub fn ime_surrounding_text(
+    surrounding: &input_method::Surrounding,
+) -> winit::platform::wayland::ImeSurroundingText {
+    winit::platform::wayland::ImeSurroundingText {
+        text: surrounding.text.clone(),
+        cursor: surrounding.cursor,
+        anchor: surrounding.anchor,
+    }
+}
+
 // See: https://en.wikipedia.org/wiki/Private_Use_Areas
 fn is_private_use(c: char) -> bool {
     ('\u{E000}'..='\u{F8FF}').contains(&c)

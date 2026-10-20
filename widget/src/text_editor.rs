@@ -355,8 +355,31 @@ where
             cursor: Rectangle::new(position, Size::new(1.0, f32::from(line_height))),
             purpose: input_method::Purpose::Normal,
             preedit: state.preedit.as_ref().map(input_method::Preedit::as_ref),
+            surrounding: surrounding(&internal.editor),
         }
     }
+}
+
+/// The line holding the cursor of `editor`, with the selection cut to it.
+fn surrounding(editor: &impl text::Editor) -> Option<input_method::Surrounding> {
+    let text::editor::Cursor {
+        position,
+        selection,
+    } = editor.cursor();
+    let text = editor.line(position.line)?.text.into_owned();
+    let cursor = position.column.min(text.len());
+    let anchor = match selection {
+        Some(anchor) if anchor.line < position.line => 0,
+        Some(anchor) if anchor.line > position.line => text.len(),
+        Some(anchor) => anchor.column.min(text.len()),
+        None => cursor,
+    };
+
+    Some(input_method::Surrounding {
+        text,
+        cursor,
+        anchor,
+    })
 }
 
 /// The content of a [`TextEditor`].
@@ -1556,4 +1579,50 @@ pub(crate) fn convert_macos_shortcut(
     };
 
     Some(keyboard::Key::Named(key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::text::editor::{Cursor, Position};
+    use crate::graphics::text::Editor;
+
+    fn at(line: usize, column: usize) -> Position {
+        Position { line, column }
+    }
+
+    fn around(text: &str, cursor: usize, anchor: usize) -> Option<input_method::Surrounding> {
+        Some(input_method::Surrounding {
+            text: text.to_owned(),
+            cursor,
+            anchor,
+        })
+    }
+
+    #[test]
+    fn the_input_method_is_told_the_line_around_the_cursor() {
+        let mut editor = Editor::with_text("Dear Sam,\nFind\ncafé au lait");
+        editor.move_to(Cursor {
+            position: at(1, 4),
+            selection: None,
+        });
+        assert_eq!(surrounding(&editor), around("Find", 4, 4));
+
+        // Byte offsets, with the selection kept to the cursor's line.
+        editor.move_to(Cursor {
+            position: at(2, 5),
+            selection: Some(at(2, 3)),
+        });
+        assert_eq!(surrounding(&editor), around("café au lait", 5, 3));
+        editor.move_to(Cursor {
+            position: at(1, 2),
+            selection: Some(at(0, 4)),
+        });
+        assert_eq!(surrounding(&editor), around("Find", 2, 0));
+        editor.move_to(Cursor {
+            position: at(1, 2),
+            selection: Some(at(2, 1)),
+        });
+        assert_eq!(surrounding(&editor), around("Find", 2, 4));
+    }
 }

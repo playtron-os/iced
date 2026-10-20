@@ -31,6 +31,15 @@ impl Value {
         self.graphemes.len()
     }
 
+    /// Returns the byte offset of the grapheme at the given `index` in the
+    /// text of the [`Value`], or its length past the end.
+    pub fn byte_offset(&self, index: usize) -> usize {
+        self.graphemes[..index.min(self.len())]
+            .iter()
+            .map(String::len)
+            .sum()
+    }
+
     /// Returns the position of the previous start of a word from the given
     /// grapheme `index`.
     pub fn previous_start_of_word(&self, index: usize) -> usize {
