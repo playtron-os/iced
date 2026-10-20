@@ -2081,6 +2081,9 @@ async fn run_instance<P>(
                         }
 
                         #[cfg(all(feature = "automation", target_os = "linux"))]
+                        core::automation::set_input_injected(false);
+
+                        #[cfg(all(feature = "automation", target_os = "linux"))]
                         automation::serve(
                             &program,
                             &mut window_manager,

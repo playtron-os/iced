@@ -58,7 +58,9 @@
 //! Clicks and keys go in as input events, into the same queue a person's input
 //! reaches the widgets through, never by calling the app's handlers. They skip
 //! the windowing layer itself, so, for instance, a click outside a Wayland popup
-//! doesn't dismiss it. Positions are surface-relative logical pixels. Pointer
+//! doesn't dismiss it. While a pass handles input the door put in,
+//! `iced::automation::input_injected()` is true, so an app can refuse what
+//! only a person may do. Positions are surface-relative logical pixels. Pointer
 //! requests also take `"x"` and `"y"`, and any request can name a `"window"`
 //! from `info`.
 //!
