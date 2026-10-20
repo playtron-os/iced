@@ -160,6 +160,7 @@ pub fn serve<P, C>(
 
                 if known {
                     events.push((left, Event::Mouse(mouse::Event::CursorLeft)));
+                    crate::core::automation::set_input_injected(true);
                     idle = false;
                 }
             }
@@ -182,6 +183,7 @@ pub fn serve<P, C>(
 
             if found {
                 events.extend(injected.into_iter().map(|event| (window, event)));
+                crate::core::automation::set_input_injected(true);
                 idle = false;
             }
 

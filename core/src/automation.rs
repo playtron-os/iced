@@ -7,7 +7,27 @@
 //! and to any lower limits the device's administrator sets in the switch file;
 //! an app can't widen what the administrator allows.
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+static INJECTED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the input being handled now includes input the door made up,
+/// rather than a person's. It is true from the moment the door puts input into
+/// a pass of the event loop until the next pass starts, so an app's `update`
+/// sees it for every message that pass produces.
+///
+/// An app refuses what only a person may do, such as answering a question
+/// about what an agent may do, while this is true.
+pub fn input_injected() -> bool {
+    INJECTED.load(Ordering::SeqCst)
+}
+
+/// Sets [`input_injected`]: for event loops, and for an app's tests.
+#[doc(hidden)]
+pub fn set_input_injected(injected: bool) {
+    INJECTED.store(injected, Ordering::SeqCst);
+}
 
 /// An app's settings for its automation door. `None` everywhere means the
 /// door's own defaults.
