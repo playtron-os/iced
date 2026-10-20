@@ -1125,7 +1125,7 @@ dependencies = [
 [[package]]
 name = "cosmic-text"
 version = "0.18.0"
-source = "git+https://github.com/playtron-os/cosmic-text.git?rev=350eb022468741587395e8be97354ac6a4fd8c9b#350eb022468741587395e8be97354ac6a4fd8c9b"
+source = "git+https://github.com/playtron-os/cosmic-text.git?rev=0796c0a071fb37cb6489cd9e75b6ecd7be76236c#0796c0a071fb37cb6489cd9e75b6ecd7be76236c"
 dependencies = [
  "bitflags 2.13.1",
  "font-types 0.11.3",
@@ -1252,7 +1252,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "cryoglyph"
 version = "0.1.0"
-source = "git+https://github.com/playtron-os/cryoglyph.git?rev=7e113c2d389f585c163e07fe026bf0300c78d4e8#7e113c2d389f585c163e07fe026bf0300c78d4e8"
+source = "git+https://github.com/playtron-os/cryoglyph.git?rev=1cad1246648ddac1eca8ca910450f183d4af8341#1cad1246648ddac1eca8ca910450f183d4af8341"
 dependencies = [
  "cosmic-text",
  "etagere",
