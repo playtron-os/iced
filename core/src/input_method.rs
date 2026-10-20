@@ -22,7 +22,25 @@ pub enum InputMethod<T = String> {
         /// be tricky, you can instead provide the current pre-edit here and the
         /// runtime will display it as an overlay (i.e. "Over-the-spot IME").
         preedit: Option<Preedit<T>>,
+        /// The text around the cursor, so the input method can fit what it
+        /// inserts to it: a space after a word, a capital letter only where a
+        /// sentence starts.
+        ///
+        /// Always `None` for a [`Purpose::Secure`] input, which never shares its text.
+        surrounding: Option<Surrounding>,
     },
+}
+
+/// The text around the cursor of an [`InputMethod`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Surrounding {
+    /// The text of the input, or of the lines around the cursor; never a pre-edit.
+    pub text: String,
+    /// The byte offset of the cursor in `text`.
+    pub cursor: usize,
+    /// The byte offset in `text` of the other end of the selection, or `cursor`
+    /// when nothing is selected.
+    pub anchor: usize,
 }
 
 /// The pre-edit of an [`InputMethod`].
@@ -86,19 +104,21 @@ pub enum Purpose {
 impl InputMethod {
     /// Merges two [`InputMethod`] strategies, prioritizing the first one when both open:
     /// ```
-    /// # use iced_core::input_method::{InputMethod, Purpose, Preedit};
+    /// # use iced_core::input_method::{InputMethod, Purpose, Preedit, Surrounding};
     /// # use iced_core::{Point, Rectangle, Size};
     ///
     /// let open = InputMethod::Enabled {
     ///     cursor: Rectangle::new(Point::ORIGIN, Size::UNIT),
     ///     purpose: Purpose::Normal,
     ///     preedit: Some(Preedit { content: "1".to_owned(), selection: None, text_size: None }),
+    ///     surrounding: Some(Surrounding { text: "Find".to_owned(), cursor: 4, anchor: 4 }),
     /// };
     ///
     /// let open_2 = InputMethod::Enabled {
     ///     cursor: Rectangle::new(Point::ORIGIN, Size::UNIT),
     ///     purpose: Purpose::Secure,
     ///     preedit: Some(Preedit { content: "2".to_owned(), selection: None, text_size: None }),
+    ///     surrounding: None,
     /// };
     ///
     /// let mut ime = InputMethod::Disabled;
@@ -135,10 +155,12 @@ impl<T> InputMethod<T> {
                 cursor,
                 purpose,
                 preedit,
+                surrounding,
             } => InputMethod::Enabled {
                 cursor: *cursor,
                 purpose: *purpose,
                 preedit: preedit.as_ref().map(Preedit::to_owned),
+                surrounding: surrounding.clone(),
             },
         }
     }

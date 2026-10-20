@@ -79,6 +79,7 @@ where
                 redraw_requested_at: None,
                 preedit: None,
                 ime_state: None,
+                ime_surrounding: None,
             },
         );
 
@@ -171,6 +172,7 @@ where
     pub redraw_requested_at: Option<Instant>,
     preedit: Option<Preedit<P::Renderer>>,
     ime_state: Option<(Rectangle, input_method::Purpose)>,
+    ime_surrounding: Option<input_method::Surrounding>,
 }
 
 impl<P, C> Window<P, C>
@@ -229,8 +231,9 @@ where
                 cursor,
                 purpose,
                 preedit,
+                surrounding,
             } => {
-                self.enable_ime(cursor, purpose);
+                self.enable_ime(cursor, purpose, surrounding);
 
                 if let Some(preedit) = preedit {
                     if preedit.content.is_empty() {
@@ -281,7 +284,12 @@ where
         }
     }
 
-    fn enable_ime(&mut self, cursor: Rectangle, purpose: input_method::Purpose) {
+    fn enable_ime(
+        &mut self,
+        cursor: Rectangle,
+        purpose: input_method::Purpose,
+        surrounding: Option<input_method::Surrounding>,
+    ) {
         if self.ime_state.is_none() {
             self.raw.set_ime_allowed(true);
         }
@@ -295,6 +303,24 @@ where
 
             self.ime_state = Some((cursor, purpose));
         }
+
+        let surrounding = surrounding.filter(|_| purpose != input_method::Purpose::Secure);
+
+        if self.ime_surrounding != surrounding {
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
+            {
+                use winit::platform::wayland::WindowExtWayland;
+
+                self.raw.set_ime_surrounding_text(
+                    surrounding
+                        .as_ref()
+                        .map(conversion::ime_surrounding_text)
+                        .as_ref(),
+                );
+            }
+
+            self.ime_surrounding = surrounding;
+        }
     }
 
     fn disable_ime(&mut self) {
@@ -302,6 +328,8 @@ where
             self.raw.set_ime_allowed(false);
             self.ime_state = None;
         }
+
+        self.ime_surrounding = None;
 
         self.preedit = None;
     }
