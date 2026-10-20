@@ -150,6 +150,18 @@ fn content_for_blur_region(
         .cloned()
 }
 
+/// The parts of `content` drawn before layer `below`.
+fn post_blur_below(content: &[blur::PostBlurContent], below: usize) -> Vec<blur::PostBlurContent> {
+    content
+        .iter()
+        .filter(|content| content.start_layer < below)
+        .map(|content| blur::PostBlurContent {
+            end_layer: Some(content.end_layer.map_or(below, |end| end.min(below))),
+            ..content.clone()
+        })
+        .collect()
+}
+
 fn mark_post_blur_layers(
     content: &blur::PostBlurContent,
     layer_count: usize,
@@ -1258,6 +1270,20 @@ impl Renderer {
                     (composite, scene_copy)
                 }
             };
+
+            // Post-blur layers drawn before this surface, such as a modal's
+            // tint with no blur of its own, go under it, not in the final replay.
+            let below = post_blur_below(post_blur_content, region.layer_index);
+            let pending = below.iter().any(|content| {
+                let end = content.end_layer.unwrap_or(layer_count).min(layer_count);
+                rendered_layers[content.start_layer.min(end)..end].contains(&false)
+            });
+            if pending {
+                self.render_post_blur_layers(encoder, &source, viewport, &below, &rendered_layers);
+                for content in &below {
+                    mark_post_blur_layers(content, layer_count, &mut rendered_layers);
+                }
+            }
 
             self.engine.blur_pipeline.blit_full(
                 &self.engine.device,
