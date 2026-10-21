@@ -1,6 +1,7 @@
 //! Build and show dropdown menus.
 use crate::core::alignment;
 use crate::core::border::{self, Border};
+use crate::core::keyboard;
 use crate::core::layout::{self, Layout};
 use crate::core::mouse;
 use crate::core::overlay;
@@ -44,6 +45,7 @@ where
     class: &'a <Theme as Catalog>::Class<'b>,
     render_icon: Option<&'a dyn Fn(&T, &mut Renderer, Rectangle, &Rectangle)>,
     icon_size: f32,
+    keyboard: bool,
 }
 
 impl<'a, 'b, T, Message, Theme, Renderer> Menu<'a, 'b, T, Message, Theme, Renderer>
@@ -84,6 +86,7 @@ where
             class,
             render_icon: None,
             icon_size: 0.0,
+            keyboard: false,
         }
     }
 
@@ -153,6 +156,15 @@ where
         self
     }
 
+    /// Whether the open [`Menu`] takes the keyboard: Up, Down, Home, End, Page Up
+    /// and Page Down move the highlight, scrolled into view, and Enter or Space
+    /// picks the highlighted option. Off by default, for a widget that steers
+    /// the highlight itself, such as a combo box.
+    pub fn keyboard(mut self, keyboard: bool) -> Self {
+        self.keyboard = keyboard;
+        self
+    }
+
     /// Turns the [`Menu`] into an overlay [`Element`] at the given target
     /// position.
     ///
@@ -181,6 +193,7 @@ where
 pub struct State {
     tree: Tree,
     placement: Cell<Option<bool>>,
+    reveal: Cell<bool>,
 }
 
 impl State {
@@ -189,6 +202,7 @@ impl State {
         Self {
             tree: Tree::empty(),
             placement: Cell::new(None),
+            reveal: Cell::new(false),
         }
     }
 
@@ -210,6 +224,12 @@ impl State {
     pub fn forget_placement(&self) {
         self.placement.set(None);
     }
+
+    /// Scroll the hovered option into view the next time the menu is laid
+    /// out, as when it opens on the selected option.
+    pub fn reveal_hovered(&self) {
+        self.reveal.set(true);
+    }
 }
 
 impl Default for State {
@@ -229,6 +249,10 @@ where
     /// Written by `layout`, read by the widget this menu belongs to.
     placement: &'a Cell<Option<bool>>,
     list: Scrollable<'a, Message, Theme, Renderer>,
+    hovered_option: &'a Cell<Option<usize>>,
+    /// Set when the hovered option must be scrolled into view.
+    reveal: &'a Cell<bool>,
+    row: Row,
     width: f32,
     container_padding: Padding,
     target_height: f32,
@@ -271,11 +295,28 @@ where
             class,
             render_icon,
             icon_size,
+            keyboard,
         } = menu;
+
+        let State {
+            tree,
+            placement,
+            reveal,
+        } = state;
+        // Shared with the list, which moves it, so the overlay can scroll to it.
+        let hovered_option = Cell::from_mut(hovered_option);
+        let row = Row {
+            text_size,
+            line_height,
+            padding,
+        };
 
         let list = Scrollable::new(List {
             options,
             hovered_option,
+            keyboard,
+            reveal,
+            row,
             to_string,
             on_selected,
             on_option_hovered,
@@ -292,7 +333,6 @@ where
         })
         .height(menu_height);
 
-        let State { tree, placement } = state;
         tree.diff(&list as &dyn Widget<_, _, _>);
 
         Self {
@@ -301,12 +341,92 @@ where
             tree,
             placement,
             list,
+            hovered_option,
+            reveal,
+            row,
             width,
             container_padding,
             target_height,
             class,
         }
     }
+}
+
+impl<Message, Theme, Renderer> Overlay<'_, '_, Message, Theme, Renderer>
+where
+    Theme: Catalog,
+    Renderer: text::Renderer,
+{
+    /// Scrolls the list just far enough to show the hovered option whole.
+    fn reveal_hovered(&mut self, layout: Layout<'_>, renderer: &Renderer) {
+        let Some(index) = self.hovered_option.get() else {
+            return;
+        };
+        let Some(list_layout) = layout.children().next() else {
+            return;
+        };
+        let height = self.row.height(renderer);
+        let top = height * index as f32;
+
+        self.list.operate(
+            self.tree,
+            list_layout,
+            renderer,
+            &mut Reveal {
+                top,
+                bottom: top + height,
+            },
+        );
+    }
+}
+
+/// The metrics every option row of a [`Menu`] shares.
+#[derive(Debug, Clone, Copy)]
+struct Row {
+    text_size: Option<Pixels>,
+    line_height: text::LineHeight,
+    padding: Padding,
+}
+
+impl Row {
+    fn height<Renderer: text::Renderer>(&self, renderer: &Renderer) -> f32 {
+        let text_size = self.text_size.unwrap_or_else(|| renderer.default_size());
+
+        f32::from(self.line_height.to_absolute(text_size)) + self.padding.y()
+    }
+}
+
+/// Scrolls the list's scrollable so the rows from `top` to `bottom` (offsets
+/// into the list) show, moving it as little as it can, as a browser does.
+struct Reveal {
+    top: f32,
+    bottom: f32,
+}
+
+impl Operation for Reveal {
+    fn scrollable(
+        &mut self,
+        _id: Option<&crate::core::widget::Id>,
+        bounds: Rectangle,
+        _content_bounds: Rectangle,
+        translation: Vector,
+        state: &mut dyn crate::core::widget::operation::Scrollable,
+    ) {
+        let y = if self.top < translation.y {
+            self.top
+        } else if self.bottom > translation.y + bounds.height {
+            self.bottom - bounds.height
+        } else {
+            return;
+        };
+
+        state.scroll_to(crate::core::widget::operation::scrollable::AbsoluteOffset {
+            x: None,
+            y: Some(y.max(0.0)),
+        });
+    }
+
+    fn traverse(&mut self, _operate: &mut dyn FnMut(&mut dyn Operation)) {}
 }
 
 impl<Message, Theme, Renderer> crate::core::Overlay<Message, Theme, Renderer>
@@ -352,11 +472,17 @@ where
         let downward = space_below > space_above;
         self.placement.set(Some(!downward));
 
-        node.move_to(if downward {
+        let node = node.move_to(if downward {
             self.position + Vector::new(0.0, self.target_height)
         } else {
             self.position - Vector::new(0.0, size.height)
-        })
+        });
+
+        if self.reveal.take() {
+            self.reveal_hovered(Layout::new(&node), renderer);
+        }
+
+        node
     }
 
     fn operate(&mut self, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn Operation) {
@@ -386,6 +512,10 @@ where
             shell,
             &bounds,
         );
+
+        if self.reveal.take() {
+            self.reveal_hovered(layout, renderer);
+        }
     }
 
     fn mouse_interaction(
@@ -496,7 +626,10 @@ where
     Renderer: text::Renderer,
 {
     options: &'a [T],
-    hovered_option: &'a mut Option<usize>,
+    hovered_option: &'a Cell<Option<usize>>,
+    keyboard: bool,
+    reveal: &'a Cell<bool>,
+    row: Row,
     to_string: &'a dyn Fn(&T) -> String,
     on_selected: Box<dyn FnMut(T) -> Message + 'a>,
     on_option_hovered: Option<&'a dyn Fn(T) -> Message>,
@@ -594,12 +727,12 @@ where
         cursor: mouse::Cursor,
         renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
-        _viewport: &Rectangle,
+        viewport: &Rectangle,
     ) {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if cursor.is_over(layout.bounds())
-                    && let Some(index) = *self.hovered_option
+                    && let Some(index) = self.hovered_option.get()
                     && let Some(option) = self.options.get(index)
                 {
                     shell.publish((self.on_selected)(option.clone()));
@@ -615,7 +748,7 @@ where
 
                     let new_hovered_option = (cursor_position.y / option_height) as usize;
 
-                    if *self.hovered_option != Some(new_hovered_option)
+                    if self.hovered_option.get() != Some(new_hovered_option)
                         && let Some(option) = self.options.get(new_hovered_option)
                     {
                         if let Some(on_option_hovered) = self.on_option_hovered {
@@ -625,7 +758,7 @@ where
                         shell.request_redraw();
                     }
 
-                    *self.hovered_option = Some(new_hovered_option);
+                    self.hovered_option.set(Some(new_hovered_option));
                 }
             }
             Event::Touch(touch::Event::FingerPressed { .. }) => {
@@ -635,14 +768,61 @@ where
                     let option_height =
                         f32::from(self.line_height.to_absolute(text_size)) + self.padding.y();
 
-                    *self.hovered_option = Some((cursor_position.y / option_height) as usize);
+                    self.hovered_option
+                        .set(Some((cursor_position.y / option_height) as usize));
 
-                    if let Some(index) = *self.hovered_option
+                    if let Some(index) = self.hovered_option.get()
                         && let Some(option) = self.options.get(index)
                     {
                         shell.publish((self.on_selected)(option.clone()));
                         shell.capture_event();
                     }
+                }
+            }
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(key),
+                repeat,
+                ..
+            }) if self.keyboard && !self.options.is_empty() => {
+                use keyboard::key::Named;
+
+                let last = self.options.len() - 1;
+                let current = self.hovered_option.get().filter(|&index| index <= last);
+                // Page Up and Page Down move by the rows that show at once.
+                let page = ((viewport.height / self.row.height(renderer)).floor() as usize).max(1);
+
+                let next = match key {
+                    Named::ArrowDown => Some(current.map_or(0, |index| (index + 1).min(last))),
+                    Named::ArrowUp => Some(current.map_or(last, |index| index.saturating_sub(1))),
+                    Named::Home => Some(0),
+                    Named::End => Some(last),
+                    Named::PageDown => Some(current.map_or(0, |index| (index + page).min(last))),
+                    Named::PageUp => Some(current.map_or(0, |index| index.saturating_sub(page))),
+                    _ => None,
+                };
+
+                if matches!(key, Named::Enter | Named::Space)
+                    && !repeat
+                    // With nothing highlighted, the pick list closes the menu instead.
+                    && let Some(option) = current.and_then(|index| self.options.get(index))
+                {
+                    shell.publish((self.on_selected)(option.clone()));
+                    shell.capture_event();
+                } else if let Some(next) = next {
+                    if current != Some(next) {
+                        self.hovered_option.set(Some(next));
+                        self.reveal.set(true);
+
+                        if let Some(on_option_hovered) = self.on_option_hovered
+                            && let Some(option) = self.options.get(next)
+                        {
+                            shell.publish(on_option_hovered(option.clone()));
+                        }
+
+                        shell.request_redraw();
+                    }
+
+                    shell.capture_event();
                 }
             }
             _ => {}
@@ -709,7 +889,7 @@ where
 
         for (i, option) in visible_options.iter().enumerate() {
             let i = start + i;
-            let is_selected = *self.hovered_option == Some(i);
+            let is_selected = self.hovered_option.get() == Some(i);
 
             let bounds = Rectangle {
                 x: bounds.x,

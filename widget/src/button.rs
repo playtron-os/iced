@@ -604,6 +604,9 @@ where
 
 /// Produces an [`Operation`] that paints every [`Button`] in the subtree it runs over as
 /// [`Status::Focused`] — styling only, so `Enter`/`Space` still need real iced focus.
+///
+/// A [`PickList`](crate::PickList) in the subtree takes it as its keyboard focus: `Enter`
+/// or `Space` then opens its menu, which the keyboard moves through and picks from.
 pub fn style_focus<T>(focused: bool) -> impl Operation<T> {
     struct StyleFocus {
         focused: bool,
@@ -613,6 +616,8 @@ pub fn style_focus<T>(focused: bool) -> impl Operation<T> {
         fn custom(&mut self, _id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Any) {
             if let Some(state) = state.downcast_mut::<State>() {
                 state.style_focused = self.focused;
+            } else if let Some(focus) = state.downcast_mut::<crate::pick_list::Focus>() {
+                focus.0 = self.focused;
             }
         }
 

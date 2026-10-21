@@ -422,6 +422,41 @@ where
     }
 }
 
+impl<'a, T, L, V, Message, Theme, Renderer> PickList<'a, T, L, V, Message, Theme, Renderer>
+where
+    T: Clone + PartialEq + 'a,
+    L: Borrow<[T]>,
+    V: Borrow<T>,
+    Message: Clone + 'a,
+    Theme: Catalog + 'a,
+    Renderer: text::Renderer + 'a,
+{
+    /// Opens the menu on the selected option, scrolled to show it.
+    fn open(&self, state: &mut State<Renderer::Paragraph>, shell: &mut Shell<'_, Message>) {
+        let selected = self.selected.as_ref().map(Borrow::borrow);
+
+        state.is_open = true;
+        state.hovered_option = self
+            .options
+            .borrow()
+            .iter()
+            .position(|option| Some(option) == selected);
+        state.menu.reveal_hovered();
+
+        if let Some(on_open) = &self.on_open {
+            shell.publish(on_open.clone());
+        }
+    }
+
+    fn close(&self, state: &mut State<Renderer::Paragraph>, shell: &mut Shell<'_, Message>) {
+        state.is_open = false;
+
+        if let Some(on_close) = &self.on_close {
+            shell.publish(on_close.clone());
+        }
+    }
+}
+
 impl<'a, T, L, V, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
     for PickList<'a, T, L, V, Message, Theme, Renderer>
 where
@@ -458,13 +493,13 @@ where
         _renderer: &Renderer,
         operation: &mut dyn crate::core::widget::Operation,
     ) {
+        let state = tree.state.downcast_mut::<State<Renderer::Paragraph>>();
+        // Where a parent that owns the focus, such as a focus ring, hands it on
+        // (see `button::style_focus`).
+        operation.custom(None, layout.bounds(), &mut state.focus);
+
         // Open with a menu to show (see `overlay`): the options are reported there.
-        if self.on_select.is_some()
-            && tree
-                .state
-                .downcast_ref::<State<Renderer::Paragraph>>()
-                .is_open
-        {
+        if self.on_select.is_some() && state.is_open {
             return;
         }
 
@@ -609,28 +644,34 @@ where
                 if state.is_open {
                     // Event wasn't processed by overlay, so cursor was clicked either outside its
                     // bounds or on the drop-down, either way we close the overlay.
-                    state.is_open = false;
-
-                    if let Some(on_close) = &self.on_close {
-                        shell.publish(on_close.clone());
-                    }
-
+                    self.close(state, shell);
                     shell.capture_event();
                 } else if cursor.is_over(layout.bounds()) {
-                    let selected = self.selected.as_ref().map(Borrow::borrow);
-
-                    state.is_open = true;
-                    state.hovered_option = self
-                        .options
-                        .borrow()
-                        .iter()
-                        .position(|option| Some(option) == selected);
-
-                    if let Some(on_open) = &self.on_open {
-                        shell.publish(on_open.clone());
-                    }
-
+                    self.open(state, shell);
                     shell.capture_event();
+                }
+            }
+            // The menu takes the keys it moves and picks with first (see `Menu::keyboard`);
+            // what reaches here opens or closes it.
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(key),
+                repeat,
+                ..
+            }) if self.on_select.is_some() => {
+                use keyboard::key::Named;
+
+                match key {
+                    Named::Enter | Named::Space if !state.is_open && state.focus.0 && !repeat => {
+                        self.open(state, shell);
+                        shell.capture_event();
+                    }
+                    Named::Escape | Named::Enter | Named::Space if state.is_open && !repeat => {
+                        self.close(state, shell);
+                        shell.capture_event();
+                    }
+                    // Tab still moves focus; the menu doesn't stay open behind it.
+                    Named::Tab if state.is_open => self.close(state, shell),
+                    _ => {}
                 }
             }
             Event::Mouse(mouse::Event::WheelScrolled {
@@ -1003,7 +1044,8 @@ where
             .container_padding(self.menu_padding)
             .font(font)
             .ellipsis(self.ellipsis)
-            .shaping(self.shaping);
+            .shaping(self.shaping)
+            .keyboard(true);
 
             if let Some(render_icon) = self.render_icon.as_deref() {
                 menu = menu.render_icon(self.icon_size.unwrap_or(0.0), render_icon);
@@ -1044,10 +1086,17 @@ where
     }
 }
 
+/// Whether a [`PickList`] holds the keyboard focus, which a parent that owns
+/// the focus hands it (see [`crate::button::style_focus`]). Enter or Space then
+/// opens its menu.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Focus(pub(crate) bool);
+
 #[derive(Debug)]
 struct State<P: text::Paragraph> {
     menu: menu::State,
     keyboard_modifiers: keyboard::Modifiers,
+    focus: Focus,
     is_open: bool,
     hovered_option: Option<usize>,
     options: Vec<paragraph::Plain<P>>,
@@ -1062,6 +1111,7 @@ impl<P: text::Paragraph> State<P> {
         Self {
             menu: menu::State::default(),
             keyboard_modifiers: keyboard::Modifiers::default(),
+            focus: Focus::default(),
             is_open: bool::default(),
             hovered_option: Option::default(),
             options: Vec::new(),
