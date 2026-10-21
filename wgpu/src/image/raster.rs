@@ -19,6 +19,9 @@ pub enum Memory {
         entry: atlas::Entry,
         bind_group: Option<Arc<wgpu::BindGroup>>,
         allocation: Option<Weak<image::Memory>>,
+        /// The image's own size; `entry` holds it halved `levels` times.
+        size: Size<u32>,
+        levels: u32,
     },
     Error(image::Error),
 }
@@ -38,15 +41,8 @@ impl Memory {
 
                 Size::new(width, height)
             }
-            Memory::Device { entry, .. } => entry.size(),
+            Memory::Device { size, .. } => *size,
             Memory::Error(_) => Size::new(1, 1),
-        }
-    }
-
-    pub fn host(&self) -> Option<Image> {
-        match self {
-            Memory::Host(image) => Some(image.clone()),
-            Memory::Device { .. } | Memory::Error(_) => None,
         }
     }
 }
@@ -66,11 +62,13 @@ impl Cache {
         self.map.get_mut(&handle.id())
     }
 
-    pub fn insert(&mut self, handle: &image::Handle, memory: Memory) {
-        let _ = self.map.insert(handle.id(), memory);
+    /// Caches `memory` for `handle`, returning what it replaces.
+    pub fn insert(&mut self, handle: &image::Handle, memory: Memory) -> Option<Memory> {
         let _ = self.hits.insert(handle.id());
 
         self.should_trim = true;
+
+        self.map.insert(handle.id(), memory)
     }
 
     pub fn contains(&self, handle: &image::Handle) -> bool {
