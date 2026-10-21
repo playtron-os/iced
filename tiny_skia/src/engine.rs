@@ -547,7 +547,10 @@ impl Engine {
                 bounds,
                 clip_bounds: local_clip_bounds,
             } => {
-                let physical_bounds = *local_clip_bounds * _transformation;
+                // Whole device pixels and a device-sized radius on the widget's
+                // bounds, as the wgpu image pipeline draws it.
+                let physical_bounds = (*local_clip_bounds * _transformation).round();
+                let drawn = (*bounds * _transformation).round();
 
                 let Some(clip_bounds) = physical_bounds.intersection(&_clip_bounds) else {
                     return;
@@ -555,10 +558,12 @@ impl Engine {
 
                 adjust_clip_mask(_clip_mask, clip_bounds);
 
-                let radius = <[f32; 4]>::from(image.border_radius);
+                let largest = physical_bounds.width.min(physical_bounds.height) / 2.0;
+                let radius = <[f32; 4]>::from(image.border_radius * _transformation.scale_factor())
+                    .map(|r| r.min(largest));
                 if radius.iter().any(|r| *r > 0.0) {
                     _clip_mask.intersect_path(
-                        &rounded_rectangle(*bounds * _transformation, radius),
+                        &rounded_rectangle(physical_bounds, radius),
                         tiny_skia::FillRule::EvenOdd,
                         true,
                         tiny_skia::Transform::identity(),
@@ -568,7 +573,7 @@ impl Engine {
                 let center = physical_bounds.center();
                 let radians = f32::from(image.rotation);
 
-                let transform = into_transform(_transformation).post_rotate_at(
+                let transform = tiny_skia::Transform::identity().post_rotate_at(
                     radians.to_degrees(),
                     center.x,
                     center.y,
@@ -577,7 +582,7 @@ impl Engine {
                 self.raster_pipeline.draw(
                     &image.handle,
                     image.filter_method,
-                    *bounds,
+                    drawn,
                     image.opacity,
                     _pixels,
                     transform,
@@ -1751,5 +1756,64 @@ mod tests {
         assert!(pixmap.pixel(80, 101).unwrap().alpha() > 0);
         // Nothing outside the damage.
         assert_eq!(pixmap.pixel(80, 98).unwrap().alpha(), 0);
+    }
+
+    /// An opaque white `bounds`-sized image with `radius` corners, drawn at
+    /// `scale` into a 100×100 pixmap.
+    #[cfg(feature = "image")]
+    fn draw_rounded_image(bounds: Rectangle, radius: f32, scale: f32) -> tiny_skia::Pixmap {
+        use crate::core::image;
+
+        let (width, height) = (bounds.width as u32, bounds.height as u32);
+        let handle =
+            image::Handle::from_rgba(width, height, vec![255; (width * height * 4) as usize]);
+        let mut pixmap = tiny_skia::Pixmap::new(100, 100).unwrap();
+        let mut mask = tiny_skia::Mask::new(100, 100).unwrap();
+        Engine::new().draw_image(
+            &Image::Raster {
+                image: image::Image {
+                    border_radius: radius.into(),
+                    ..image::Image::new(handle)
+                },
+                bounds,
+                clip_bounds: bounds,
+            },
+            Transformation::scale(scale),
+            &mut pixmap.as_mut(),
+            &mut mask,
+            EVERYTHING,
+        );
+        pixmap
+    }
+
+    /// The corner is as round on the device as wgpu draws it: 8 logical
+    /// pixels are 16 at 2x, so the pixel 3 in from each edge is outside it.
+    #[cfg(feature = "image")]
+    #[test]
+    fn a_rounded_image_scales_its_corner_to_the_device() {
+        let bounds = Rectangle::new(Point::new(5.0, 5.0), Size::new(30.0, 20.0));
+        let pixmap = draw_rounded_image(bounds, 8.0, 2.0);
+
+        assert_eq!(pixmap.pixel(13, 13).unwrap().alpha(), 0);
+        assert_eq!(pixmap.pixel(30, 30).unwrap().alpha(), 255);
+    }
+
+    /// An image between device pixels lands on whole ones, as wgpu rounds it:
+    /// 10.5..40.5 at 1x covers 11..41, with no half-covered column.
+    #[cfg(feature = "image")]
+    #[test]
+    fn an_image_between_pixels_lands_on_whole_pixels() {
+        let bounds = Rectangle::new(Point::new(10.5, 10.5), Size::new(30.0, 20.0));
+        let pixmap = draw_rounded_image(bounds, 0.0, 1.0);
+        let row: Vec<u8> = (0..60)
+            .map(|x| pixmap.pixel(x, 20).unwrap().alpha())
+            .collect();
+
+        assert!(
+            row.iter()
+                .enumerate()
+                .all(|(x, &a)| a == if (11..41).contains(&x) { 255 } else { 0 }),
+            "{row:?}"
+        );
     }
 }
