@@ -27,16 +27,16 @@ SUFFIX = "-kora"
 # Fork -> (version to publish, crates it publishes), in publishing order.
 # Bump a fork's version to publish its pinned commit again.
 FORKS = {
-    "cosmic-text": ("0.18.0", ["cosmic-text"]),
+    "cosmic-text": ("0.18.1", ["cosmic-text"]),
     "wgpu": ("28.0.1", [
         "wgpu", "wgpu-core", "wgpu-hal", "wgpu-types",
         "wgpu-core-deps-apple", "wgpu-core-deps-emscripten",
         "wgpu-core-deps-wasm", "wgpu-core-deps-windows-linux-android",
     ]),
-    "winit": ("0.30.12", ["winit"]),
-    "cryoglyph": ("0.1.0", ["cryoglyph"]),
+    "winit": ("0.30.13", ["winit"]),
+    "cryoglyph": ("0.1.1", ["cryoglyph"]),
     "softbuffer": ("0.4.8", ["softbuffer"]),
-    "iced": ("0.15.0", [
+    "iced": ("0.15.1", [
         "iced", "iced_automation", "iced_beacon", "iced_core", "iced_debug",
         "iced_devtools", "iced_futures", "iced_graphics", "iced_highlighter",
         "iced_program", "iced_renderer", "iced_runtime", "iced_selector",
