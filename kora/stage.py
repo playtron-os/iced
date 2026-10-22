@@ -3,7 +3,7 @@
 
 Usage: stage.py <iced-checkout> <out-dir> [--local]
 
-Fetches the wgpu, winit, cosmic-text and cryoglyph forks at the commits this
+Fetches the wgpu, winit, cosmic-text, cryoglyph and softbuffer forks at the commits this
 Cargo.toml pins, copies every fork to <out-dir>/<fork>, renames the crates it
 publishes to `<name>-kora`, and turns git dependencies on the other forks into
 crates.io dependencies on the renamed crates. Code keeps its crate names, so
@@ -35,6 +35,7 @@ FORKS = {
     ]),
     "winit": ("0.30.12", ["winit"]),
     "cryoglyph": ("0.1.0", ["cryoglyph"]),
+    "softbuffer": ("0.4.8", ["softbuffer"]),
     "iced": ("0.15.0", [
         "iced", "iced_automation", "iced_beacon", "iced_core", "iced_debug",
         "iced_devtools", "iced_futures", "iced_graphics", "iced_highlighter",
