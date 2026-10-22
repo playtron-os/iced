@@ -9,7 +9,7 @@ iced = { package = "iced-kora", version = "0.15" }
 
 ## Publishing
 
-1. In `stage.py`, bump the version of each fork whose pinned commit changed. `FORKS` lists them in publishing order.
+1. In `stage.py`, bump the version of each fork whose pinned commit changed. `FORKS` lists them in publishing order. winit is pinned by branch, so it changes whenever that branch moves.
 2. Run the "Publish Kora crates" workflow. It fetches the forks at the commits `Cargo.toml` pins, stages them in renamed form and publishes them. Versions crates.io already has are skipped, so a failed run can be started again.
 
 To try it locally, stage with `--local`, then build against the staged copies without publishing anything:
