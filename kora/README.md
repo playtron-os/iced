@@ -1,6 +1,6 @@
 # Kora crates
 
-crates.io rejects git dependencies, so a library built on this fork, such as [ic3d](https://github.com/playtron-os/ic3d), can only be published if the fork is on crates.io too. The upstream names belong to upstream, so this fork and the forks it pins are published as `-kora` crates: `iced-kora`, `iced-core-kora`, `wgpu-kora`, `winit-kora`, `cosmic-text-kora`, `cryoglyph-kora`, and so on. Only the package names change. Code keeps its crate names:
+crates.io rejects git dependencies, so a library built on this fork, such as [ic3d](https://github.com/playtron-os/ic3d), can only be published if the fork is on crates.io too. The upstream names belong to upstream, so this fork and the forks it pins are published as `-kora` crates: `iced-kora`, `iced-core-kora`, `wgpu-kora`, `winit-kora`, `cosmic-text-kora`, `cryoglyph-kora`, `softbuffer-kora`, and so on. Only the package names change. Code keeps its crate names:
 
 ```toml
 [dependencies]

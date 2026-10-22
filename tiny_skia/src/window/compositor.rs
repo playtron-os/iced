@@ -58,8 +58,17 @@ impl crate::graphics::Compositor for Compositor {
         width: u32,
         height: u32,
     ) -> Self::Surface {
-        let window = softbuffer::Surface::new(&self.context, Box::new(window.clone()) as _)
+        let mut window = softbuffer::Surface::new(&self.context, Box::new(window.clone()) as _)
             .expect("Create softbuffer surface for window");
+
+        // The pixels already carry premultiplied alpha, as wgpu presents them. Only Wayland
+        // can show it; elsewhere the alpha byte stays ignored.
+        let alpha = softbuffer::AlphaMode::Premultiplied;
+        if window.supports_alpha_mode(alpha) {
+            window
+                .set_alpha_mode(alpha)
+                .expect("Present premultiplied alpha");
+        }
 
         let mut surface = Surface {
             window,
@@ -246,4 +255,59 @@ pub fn screenshot(
             acc
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Renderer;
+    use crate::core::renderer::Quad;
+    use crate::core::{Color, Font, Pixels, Rectangle, Renderer as _, Size, border};
+    use crate::graphics::Viewport;
+
+    /// `present` hands Wayland these words as ARGB8888, which it reads as premultiplied.
+    #[test]
+    fn presented_words_are_premultiplied_argb() {
+        const SIZE: u32 = 40;
+        let bounds = Rectangle::with_size(Size::new(SIZE as f32, SIZE as f32));
+        let mut renderer = Renderer::new(Font::DEFAULT, Pixels(16.0));
+        renderer.reset(bounds);
+        renderer.fill_quad(
+            Quad {
+                bounds,
+                border: border::rounded(12.0),
+                ..Quad::default()
+            },
+            Color::from_rgba(1.0, 0.0, 0.0, 0.5),
+        );
+        renderer.fill_quad(
+            Quad {
+                bounds: Rectangle::new([15.0, 15.0].into(), Size::new(10.0, 10.0)),
+                ..Quad::default()
+            },
+            Color::from_rgb(0.0, 0.0, 1.0),
+        );
+
+        let mut words = vec![0xDEAD_BEEF_u32; (SIZE * SIZE) as usize];
+        let mut pixels =
+            tiny_skia::PixmapMut::from_bytes(bytemuck::cast_slice_mut(&mut words), SIZE, SIZE)
+                .expect("Create pixel map");
+        renderer.draw(
+            &mut pixels,
+            &mut tiny_skia::Mask::new(SIZE, SIZE).expect("Create clip mask"),
+            &Viewport::with_physical_size(Size::new(SIZE, SIZE), 1.0),
+            &[bounds],
+            Color::TRANSPARENT,
+        );
+        let at = |x: u32, y: u32| words[(y * SIZE + x) as usize];
+
+        // Outside the rounded corner: cleared to transparent, not black.
+        assert_eq!(at(0, 0), 0x0000_0000);
+        // Opaque blue on top.
+        assert_eq!(at(20, 20), 0xFF00_00FF);
+        // Half-transparent red, with red already multiplied by alpha.
+        let red = at(5, 20);
+        let (a, r, g, b) = (red >> 24, (red >> 16) & 0xFF, (red >> 8) & 0xFF, red & 0xFF);
+        assert!((127..=128).contains(&a), "alpha {a}");
+        assert_eq!((r, g, b), (a, 0, 0), "{red:#010x}");
+    }
 }
