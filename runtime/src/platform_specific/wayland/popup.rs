@@ -370,3 +370,56 @@ pub fn forget_keyboard_input(id: Id) {
         .unwrap_or_else(PoisonError::into_inner)
         .remove(&id);
 }
+
+/// Popups left out of screen captures, by ID: a register like [`keyboard_input`]'s.
+static CAPTURE_EXCLUDED: Mutex<BTreeSet<Id>> = Mutex::new(BTreeSet::new());
+
+/// Leave the popup `id` out of screenshots and recordings while it stays on screen, or put it
+/// back; popups are captured by default.
+///
+/// For a tooltip, which should not end up in a capture of what it points at. Set it before
+/// [`show`]; only `iced_layershell` reads it, on a compositor with `kora_capture_exclusion_v1`.
+pub fn exclude_from_capture(id: Id, excluded: bool) {
+    let mut popups = CAPTURE_EXCLUDED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let _ = if excluded {
+        popups.insert(id)
+    } else {
+        popups.remove(&id)
+    };
+}
+
+/// Whether the popup `id` is left out of captures; a backend asks as it creates the popup.
+pub fn excluded_from_capture(id: Id) -> bool {
+    CAPTURE_EXCLUDED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(&id)
+}
+
+/// Forget the popup `id`'s capture exclusion; a backend drops it with the popup.
+pub fn forget_capture_exclusion(id: Id) {
+    let _ = CAPTURE_EXCLUDED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(&id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_popup_is_captured_until_it_opts_out() {
+        let id = Id::unique();
+        assert!(!excluded_from_capture(id));
+        exclude_from_capture(id, true);
+        assert!(excluded_from_capture(id));
+        exclude_from_capture(id, false);
+        assert!(!excluded_from_capture(id));
+        exclude_from_capture(id, true);
+        forget_capture_exclusion(id);
+        assert!(!excluded_from_capture(id));
+    }
+}
