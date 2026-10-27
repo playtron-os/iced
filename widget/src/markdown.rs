@@ -44,6 +44,8 @@
 //! }
 //! ```
 
+pub mod math;
+
 use crate::core::alignment;
 use crate::core::border;
 use crate::core::font::{self, Font};
@@ -575,7 +577,8 @@ fn parse_with<'a>(
             | pulldown_cmark::Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
             | pulldown_cmark::Options::ENABLE_TABLES
             | pulldown_cmark::Options::ENABLE_STRIKETHROUGH
-            | pulldown_cmark::Options::ENABLE_TASKLISTS,
+            | pulldown_cmark::Options::ENABLE_TASKLISTS
+            | pulldown_cmark::Options::ENABLE_MATH,
         {
             let references = state.borrow().references.clone();
             let broken_links = broken_links.clone();
@@ -957,6 +960,28 @@ fn parse_with<'a>(
 
             spans.push(span);
 
+            None
+        }
+        pulldown_cmark::Event::InlineMath(tex) | pulldown_cmark::Event::DisplayMath(tex)
+            if !metadata =>
+        {
+            // pulldown-cmark closes a `$` before a digit; Pandoc does not, so
+            // "$5-$10" stays money.
+            let money = markdown[source.end..].starts_with(|c: char| c.is_ascii_digit());
+            let text = if money && !markdown[source.clone()].starts_with("$$") {
+                markdown[source].to_owned()
+            } else {
+                math::to_unicode(&tex)
+            };
+
+            spans.push(Span::Standard {
+                text,
+                strong,
+                emphasis,
+                strikethrough,
+                link: link.clone(),
+                code: false,
+            });
             None
         }
         pulldown_cmark::Event::Code(code) if !metadata => {
