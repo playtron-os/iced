@@ -425,6 +425,10 @@ impl graphics::Layer for Layer {
         self.bounds_radius = Some(radius);
     }
 
+    fn clip_radius(&self) -> Option<core::border::Radius> {
+        self.bounds_radius
+    }
+
     fn start(&self) -> usize {
         if !self.quads.is_empty() {
             return 1;
@@ -543,4 +547,24 @@ fn to_gpu_quad(quad: renderer::Quad, transformation: Transformation) -> Quad {
 fn from_cosmic_color(color: cosmic_text::Color) -> Color {
     let [r, g, b, a] = color.as_rgba();
     Color::from_rgba8(r, g, b, a as f32 / 255.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn card() -> Rectangle {
+        Rectangle::new(Point::ORIGIN, core::Size::new(100.0, 50.0))
+    }
+
+    #[test]
+    fn a_split_keeps_the_rounded_clip() {
+        // An opacity group continues in a split layer, which must keep the corners.
+        let mut stack = Stack::new();
+        stack.push_clip_rounded(card(), 12.0.into());
+        stack.split();
+        let split = stack.as_slice().last().expect("a layer");
+        assert_eq!(split.bounds, card());
+        assert_eq!(split.bounds_radius, Some(12.0.into()));
+    }
 }
