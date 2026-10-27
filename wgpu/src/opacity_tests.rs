@@ -111,6 +111,27 @@ fn a_faded_group_is_composited_once() {
 
 #[test]
 #[ignore = "needs a GPU adapter"]
+fn a_faded_group_keeps_its_rounded_clip() {
+    let mut renderer = renderer();
+    page(&mut renderer);
+    renderer.with_layer_rounded(screen(), 8.0.into(), |renderer| {
+        renderer.with_opacity(screen(), 0.5, |renderer| {
+            quad(renderer, screen(), Color::from_rgb(1.0, 0.0, 0.0));
+        });
+    });
+    let pixels = render(&mut renderer);
+
+    let corner = pixel(&pixels, 0, 0);
+    assert!(close(corner, [255, 255, 255]), "corner {corner:?}");
+    let middle = pixel(&pixels, 20, 10);
+    assert!(
+        close(middle, [255, mix(0.5), mix(0.5)]),
+        "middle {middle:?}"
+    );
+}
+
+#[test]
+#[ignore = "needs a GPU adapter"]
 fn an_opaque_group_draws_as_without_one() {
     let mut grouped = renderer();
     page(&mut grouped);
