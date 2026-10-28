@@ -3,9 +3,9 @@
 //! This module provides types for creating and managing popup surfaces
 //! that can appear outside the parent window bounds.
 
-use iced_core::Rectangle;
 use iced_core::layout::Limits;
 use iced_core::window::Id;
+use iced_core::{Rectangle, Size};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -148,7 +148,11 @@ impl Hash for PopupSettings {
 /// Positioner configuration for popup placement.
 #[derive(Debug, Clone)]
 pub struct Positioner {
-    /// Size of the popup (if None, will be auto-sized)
+    /// Size of the popup.
+    ///
+    /// `None` fits it to its content: the view is laid out within the
+    /// maximum of `size_limits` and the surface is [`fitted_size`] of what it
+    /// draws, kept so on every frame as the content changes.
     pub size: Option<(u32, u32)>,
     /// Size limits for auto-sizing
     pub size_limits: Limits,
@@ -178,6 +182,23 @@ pub struct Positioner {
     /// padding on each side. This tells the compositor to only constrain
     /// the visible content area, not the shadow.
     pub shadow_padding: u32,
+}
+
+impl Positioner {
+    /// The bounds a popup fitted to its content is laid out within; `None`
+    /// when it has a `size`.
+    pub fn fit_within(&self) -> Option<Size> {
+        self.size.is_none().then(|| self.size_limits.max())
+    }
+}
+
+/// The surface size, in logical pixels, of a popup fitted to `content`: the
+/// size its view draws, rounded up to whole pixels.
+///
+/// Nothing pads it, so the surface — and the blur and shadow a compositor
+/// puts behind all of it — ends where the view does.
+pub fn fitted_size(content: Size) -> (u32, u32) {
+    (content.width.ceil() as u32, content.height.ceil() as u32)
 }
 
 impl Hash for Positioner {
@@ -409,6 +430,34 @@ pub fn forget_capture_exclusion(id: Id) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sized_popup_is_not_fitted() {
+        let positioner = Positioner {
+            size: Some((280, 356)),
+            ..Positioner::default()
+        };
+        assert_eq!(positioner.fit_within(), None);
+    }
+
+    #[test]
+    fn an_unsized_popup_is_fitted_within_its_maximum() {
+        let positioner = Positioner {
+            size: None,
+            size_limits: Limits::NONE
+                .min_height(50.0)
+                .max_width(600.0)
+                .max_height(800.0),
+            ..Positioner::default()
+        };
+        assert_eq!(positioner.fit_within(), Some(Size::new(600.0, 800.0)));
+    }
+
+    #[test]
+    fn a_fitted_surface_rounds_up_to_whole_pixels() {
+        assert_eq!(fitted_size(Size::new(280.0, 320.0)), (280, 320));
+        assert_eq!(fitted_size(Size::new(279.25, 319.5)), (280, 320));
+    }
 
     #[test]
     fn a_popup_is_captured_until_it_opts_out() {

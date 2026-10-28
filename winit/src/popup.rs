@@ -109,8 +109,15 @@ where
     /// already exists -- so it is NOT a safe "does this have a surface to
     /// destroy?" test. Use [`Popup::id`] for that.
     pub winit_popup_id: Option<u64>,
-    /// Size of the popup.
+    /// Size of the popup, in physical pixels.
     pub size: Size<u32>,
+    /// Size of the popup, in logical pixels: what winit sized the surface to.
+    pub logical_size: Size<u32>,
+    /// The bounds a popup fitted to its content is laid out within; `None`
+    /// for one with a set size.
+    pub fit_within: Option<Size>,
+    /// Whether the last frame was skipped to resize the popup to its content.
+    pub refitted: bool,
     /// Scale factor (inherited from the root window).
     pub scale_factor: f32,
     /// Viewport for rendering.
@@ -125,6 +132,55 @@ where
     pub presented: bool,
     /// Modifiers held while the popup has keyboard focus, if it takes keyboard input.
     pub modifiers: ModifiersState,
+}
+
+impl<C> Popup<C>
+where
+    C: Compositor,
+{
+    /// The bounds the popup's view is laid out within: those it is fitted
+    /// within, or its surface. `None` before it is configured.
+    pub fn layout_bounds(&self) -> Option<Size> {
+        self.fit_within
+            .or_else(|| self.viewport.as_ref().map(Viewport::logical_size))
+    }
+
+    /// The logical size the popup has to take for its view to draw `content`,
+    /// when that is not its size already. Only a popup fitted to its content
+    /// follows it, and never down to nothing: a view that went empty is one
+    /// whose popup is closing.
+    pub fn refit(&self, content: Size) -> Option<Size<u32>> {
+        refit(self.fit_within.is_some(), self.logical_size, content)
+    }
+
+    /// Resize the surface the popup renders to, to `logical` pixels.
+    pub fn resize(&mut self, logical: Size<u32>, compositor: &mut C) {
+        let scale = self.scale_factor;
+        let physical_w = (logical.width as f32 * scale).ceil() as u32;
+        let physical_h = (logical.height as f32 * scale).ceil() as u32;
+
+        self.logical_size = logical;
+        self.size = Size::new(physical_w, physical_h);
+        self.viewport = Some(Viewport::with_physical_size(
+            Size::new(physical_w, physical_h),
+            scale,
+        ));
+
+        if let Some(ref mut surface) = self.surface {
+            compositor.configure_surface(surface, physical_w, physical_h);
+        }
+    }
+}
+
+/// The size a popup at `current` logical pixels takes for its view to draw
+/// `content`, when it is `fitted` to its content and that differs.
+fn refit(fitted: bool, current: Size<u32>, content: Size) -> Option<Size<u32>> {
+    if !fitted {
+        return None;
+    }
+    let (width, height) = runtime_popup::fitted_size(content);
+    let size = Size::new(width, height);
+    (width > 0 && height > 0 && size != current).then_some(size)
 }
 
 /// The modifiers a keyboard popup holds after `event`: losing focus drops them, as for a window.
@@ -243,6 +299,8 @@ where
     entries: BTreeMap<PopupId, Popup<C>>,
     /// Popups asked of winit and not reported back yet.
     requested: BTreeSet<window::Id>,
+    /// What each requested popup fitted to its content is laid out within.
+    fits: BTreeMap<window::Id, Size>,
     keyboard: KeyboardOptIns,
     _marker: std::marker::PhantomData<P>,
 }
@@ -258,19 +316,30 @@ where
         Self {
             entries: BTreeMap::new(),
             requested: BTreeSet::new(),
+            fits: BTreeMap::new(),
             keyboard: KeyboardOptIns::default(),
             _marker: std::marker::PhantomData,
         }
     }
 
     /// Note that popup `iced_id` was asked of winit, until it is inserted or its creation fails.
-    pub fn request(&mut self, iced_id: window::Id) {
+    /// `fit_within` is set for a popup fitted to its content.
+    pub fn request(&mut self, iced_id: window::Id, fit_within: Option<Size>) {
         let _ = self.requested.insert(iced_id);
+        match fit_within {
+            Some(bounds) => {
+                let _ = self.fits.insert(iced_id, bounds);
+            }
+            None => {
+                let _ = self.fits.remove(&iced_id);
+            }
+        }
     }
 
     /// Forget a requested popup winit couldn't create.
     pub fn creation_failed(&mut self, iced_id: window::Id) {
         let _ = self.requested.remove(&iced_id);
+        let _ = self.fits.remove(&iced_id);
         self.keyboard.forget(iced_id);
         runtime_popup::forget_keyboard_input(iced_id);
     }
@@ -301,6 +370,7 @@ where
         scale_factor: f32,
     ) {
         let _ = self.requested.remove(&iced_id);
+        let fit_within = self.fits.remove(&iced_id);
         let _ = self.entries.insert(
             id,
             Popup {
@@ -311,6 +381,9 @@ where
                 parent_popup: parent.popup,
                 winit_popup_id: None,
                 size,
+                logical_size: size,
+                fit_within,
+                refitted: false,
                 scale_factor,
                 viewport: None,
                 surface: None,
@@ -323,6 +396,10 @@ where
     }
 
     /// Mark a popup as configured and set up rendering surfaces.
+    ///
+    /// Only the first configure does: a later one (the popup placed again
+    /// after a resize, or as its parent moved) is acked already and lands with
+    /// the next frame, so it returns `false` and keeps the surfaces.
     pub fn configure(
         &mut self,
         id: PopupId,
@@ -333,8 +410,12 @@ where
         compositor: &mut C,
     ) -> bool {
         if let Some(popup) = self.entries.get_mut(&id) {
+            if popup.configured {
+                return false;
+            }
             popup.winit_popup_id = Some(winit_popup_id);
             popup.configured = true;
+            popup.logical_size = Size::new(width, height);
 
             // width/height from Wayland are in logical coordinates
             // Convert to physical size for rendering
@@ -435,19 +516,9 @@ where
     ) -> Option<(u64, window::Id)> {
         let popup = self.entries.values_mut().find(|p| p.iced_id == iced_id)?;
 
-        let scale = popup.scale_factor;
-        let physical_w = (width as f32 * scale).ceil() as u32;
-        let physical_h = (height as f32 * scale).ceil() as u32;
-
-        popup.size = Size::new(physical_w, physical_h);
-        popup.viewport = Some(Viewport::with_physical_size(
-            Size::new(physical_w, physical_h),
-            scale,
-        ));
-
-        if let Some(ref mut surface) = popup.surface {
-            compositor.configure_surface(surface, physical_w, physical_h);
-        }
+        // The app sizes it from now on.
+        popup.fit_within = None;
+        popup.resize(Size::new(width, height), compositor);
 
         let winit_id = popup.winit_popup_id?;
         Some((winit_id, popup.root_window))
@@ -490,12 +561,53 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyboardOptIns, ParentError, PopupId, PopupParent, resolve_parent, subtree_leaf_first,
-        track_modifiers,
+        KeyboardOptIns, ParentError, PopupId, PopupParent, refit, resolve_parent,
+        subtree_leaf_first, track_modifiers,
     };
-    use crate::core::window;
+    use crate::core::{Size, window};
     use winit::event::WindowEvent;
     use winit::keyboard::ModifiersState;
+
+    // A file's context menu as it opened, with Open and Open With rows, and
+    // once the app lookup found nothing to open it: Open With… alone, a row
+    // (36px) shorter.
+    const OPENED: Size<u32> = Size::new(280, 356);
+    const SHRUNK: Size = Size::new(280.0, 320.0);
+
+    #[test]
+    fn a_fitted_popup_shrinks_to_a_view_that_lost_a_row() {
+        assert_eq!(refit(true, OPENED, SHRUNK), Some(Size::new(280, 320)));
+    }
+
+    #[test]
+    fn a_fitted_popup_grows_to_a_view_that_gained_a_row() {
+        assert_eq!(
+            refit(true, Size::new(280, 320), Size::new(280.0, 356.0)),
+            Some(OPENED)
+        );
+    }
+
+    #[test]
+    fn a_fitted_popup_its_view_still_fills_keeps_its_size() {
+        assert_eq!(refit(true, OPENED, Size::new(280.0, 356.0)), None);
+        assert_eq!(
+            refit(true, OPENED, Size::new(279.6, 355.2)),
+            None,
+            "a fraction of a pixel rounds up to the size it has"
+        );
+    }
+
+    #[test]
+    fn a_popup_with_a_set_size_never_follows_its_view() {
+        assert_eq!(refit(false, OPENED, SHRUNK), None);
+    }
+
+    #[test]
+    fn a_closing_popup_keeps_its_size() {
+        // Its view is gone a frame before the popup is.
+        assert_eq!(refit(true, OPENED, Size::ZERO), None);
+        assert_eq!(refit(true, OPENED, Size::new(280.0, 0.0)), None);
+    }
 
     #[test]
     fn keyboard_input_needs_a_requested_or_live_popup() {

@@ -1815,26 +1815,54 @@ async fn run_instance<P>(
                                             continue;
                                         }
 
+                                        let (Some(bounds), Some(renderer)) =
+                                            (popup.layout_bounds(), popup.renderer.as_mut())
+                                        else {
+                                            continue;
+                                        };
+
+                                        // Build or rebuild popup UI using cached state
+                                        let cache =
+                                            ui_caches.remove(&popup.iced_id).unwrap_or_default();
+                                        let mut popup_ui = UserInterface::build(
+                                            program.view(popup.iced_id),
+                                            bounds,
+                                            cache,
+                                            renderer,
+                                        );
+
+                                        // A popup fitted to its content follows it. winit moves
+                                        // its viewport, blur and window geometry to the new size
+                                        // before the next frame, whose buffer then lands with
+                                        // them in one commit, so this one is skipped. A size that
+                                        // changes every frame still draws every other one.
+                                        let refit = popup.refit(popup_ui.content_size());
+                                        if let Some(size) = refit {
+                                            popup.resize(size, current_compositor);
+                                            if let Some(winit_popup_id) = popup.winit_popup_id {
+                                                let _ = control_sender.start_send(
+                                                    Control::ResizePopup {
+                                                        winit_popup_id,
+                                                        width: size.width,
+                                                        height: size.height,
+                                                    },
+                                                );
+                                            }
+                                        }
+                                        if refit.is_some() && !popup.refitted {
+                                            popup.refitted = true;
+                                            let _ = ui_caches
+                                                .insert(popup.iced_id, popup_ui.into_cache());
+                                            window.request_frame();
+                                            continue;
+                                        }
+                                        popup.refitted = false;
+
                                         if let (Some(surface), Some(renderer), Some(viewport)) = (
                                             popup.surface.as_mut(),
                                             popup.renderer.as_mut(),
                                             popup.viewport.as_ref(),
                                         ) {
-                                            // Build or rebuild popup UI using cached state
-                                            let popup_view = program.view(popup.iced_id);
-                                            let logical_size = viewport.logical_size();
-
-                                            let cache = ui_caches
-                                                .remove(&popup.iced_id)
-                                                .unwrap_or_default();
-
-                                            let mut popup_ui = UserInterface::build(
-                                                popup_view,
-                                                Size::new(logical_size.width, logical_size.height),
-                                                cache,
-                                                renderer,
-                                            );
-
                                             // Get cursor position for this popup
                                             let popup_cursor = popup_cursor_position
                                                 .get(&popup.iced_id)
@@ -2246,20 +2274,17 @@ async fn run_instance<P>(
                                     continue;
                                 }
 
-                                if let (Some(renderer), Some(viewport)) =
-                                    (popup.renderer.as_mut(), popup.viewport.as_ref())
+                                if let (Some(bounds), Some(renderer)) =
+                                    (popup.layout_bounds(), popup.renderer.as_mut())
                                 {
                                     let popup_view = program.view(iced_id);
-                                    let logical_size = viewport.logical_size();
 
                                     let cache = ui_caches.remove(&iced_id).unwrap_or_default();
 
-                                    let mut popup_ui = UserInterface::build(
-                                        popup_view,
-                                        Size::new(logical_size.width, logical_size.height),
-                                        cache,
-                                        renderer,
-                                    );
+                                    // Laid out as the frame lays it out, so input lands where
+                                    // the popup drew.
+                                    let mut popup_ui =
+                                        UserInterface::build(popup_view, bounds, cache, renderer);
 
                                     let popup_cursor = popup_cursor_position
                                         .get(&iced_id)
@@ -3593,7 +3618,8 @@ fn run_action<'a, P, C>(
                                     if let Some(size) = settings.positioner.size {
                                         (size, settings.positioner.window_geometry)
                                     } else if let Some(comp) = compositor.as_mut() {
-                                        // Auto-size: measure the popup content to determine size
+                                        // Fitted to its content: measured now, and kept so on
+                                        // every frame it draws.
                                         let mut measure_renderer = comp.create_renderer();
                                         let popup_view = program.view(settings.id);
                                         let max_size = settings.positioner.size_limits.max();
@@ -3603,9 +3629,7 @@ fn run_action<'a, P, C>(
                                             user_interface::Cache::default(),
                                             &mut measure_renderer,
                                         );
-                                        let content = ui.content_size();
-                                        let w = content.width.ceil() as u32;
-                                        let h = content.height.ceil() as u32;
+                                        let (w, h) = popup::fitted_size(ui.content_size());
                                         // Compute window_geometry from shadow_padding
                                         let wg = if shadow_pad > 0 {
                                             let sp = shadow_pad as i32;
@@ -3652,7 +3676,8 @@ fn run_action<'a, P, C>(
                                         tooltip_delay_ms: settings.tooltip_delay_ms,
                                     })
                                     .expect("Send control action");
-                                popup_manager.request(settings.id);
+                                popup_manager
+                                    .request(settings.id, settings.positioner.fit_within());
                                 // The app's opt-in, taken as the popup is asked for.
                                 let _ = popup_manager.set_keyboard_input(
                                     settings.id,

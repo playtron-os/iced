@@ -106,6 +106,15 @@ where
         }
     }
 
+    /// The size the root of the interface takes when laid out: what it draws,
+    /// which can be less than the size it was given.
+    ///
+    /// A Wayland popup with no set size gets a surface of exactly this, laid out
+    /// within its positioner's maximum.
+    pub fn content_size(&self) -> Size {
+        self.raw.content_size()
+    }
+
     /// Sets the scale factor a [`snapshot`](Self::snapshot) is drawn at; 2 by
     /// default.
     pub fn scale_factor(mut self, scale_factor: f32) -> Self {
