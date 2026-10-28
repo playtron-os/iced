@@ -205,3 +205,39 @@ impl Pixels {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An image that fails to load is measured again in the same frame (layout,
+    // then draw); the second look must fail too, not panic.
+    #[test]
+    fn a_failed_image_fails_every_time() {
+        let mut pipeline = Pipeline::new();
+        let mut canvas = tiny_skia::Pixmap::new(8, 8).expect("canvas");
+        let failed = [
+            raster::Handle::from_bytes(&b"not an image"[..]),
+            raster::Handle::from_path("/nonexistent/icon.png"),
+            raster::Handle::from_rgba(0, 0, Vec::new()),
+        ];
+
+        for handle in &failed {
+            for _ in 0..2 {
+                assert_eq!(pipeline.dimensions(handle), None);
+                assert!(pipeline.load(handle).is_err());
+                pipeline.draw(
+                    handle,
+                    raster::FilterMethod::Linear,
+                    Rectangle::new([0.0, 0.0].into(), Size::new(8.0, 8.0)),
+                    1.0,
+                    &mut canvas.as_mut(),
+                    tiny_skia::Transform::identity(),
+                    None,
+                );
+            }
+        }
+
+        assert!(canvas.pixels().iter().all(|pixel| pixel.alpha() == 0));
+    }
+}
