@@ -165,6 +165,24 @@ pub enum Action {
     /// - **Web / Wayland:** Unsupported.
     GainFocus(Id),
 
+    /// Request an activation token for the window, to hand to another
+    /// application it starts or asks to show something.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Wayland / X11:** Supported. Elsewhere the token is `None`.
+    RequestActivationToken(Id, oneshot::Sender<Option<String>>),
+
+    /// Raise and focus the window with an activation token another
+    /// application obtained.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Wayland:** Requires `xdg_activation_v1`; the compositor decides.
+    /// - **X11:** Completes the token's startup sequence and asks for focus.
+    /// - **Other platforms:** The same as [`Action::GainFocus`].
+    Activate(Id, String),
+
     /// Inhibit (or release) the compositor's global keyboard shortcuts for the
     /// window, so it receives reserved combos (e.g. Super) for key capture.
     ///
@@ -792,6 +810,26 @@ pub fn request_user_attention<T>(id: Id, user_attention: Option<UserAttention>) 
 /// user experience.
 pub fn gain_focus<T>(id: Id) -> Task<T> {
     task::effect(crate::Action::Window(Action::GainFocus(id)))
+}
+
+/// Requests an activation token for the window.
+///
+/// Hand it to an application this one starts, in `XDG_ACTIVATION_TOKEN`, or
+/// to one it asks to show something, so that application's window may take
+/// focus; see [`activate`]. A user action in this window is what makes the
+/// token worth honoring, so ask for it in answer to one.
+///
+/// Produces `None` where tokens are unsupported or the window is gone.
+pub fn activation_token(id: Id) -> Task<Option<String>> {
+    task::oneshot(move |channel| crate::Action::Window(Action::RequestActivationToken(id, channel)))
+}
+
+/// Raises and focuses the window with an activation token another
+/// application obtained, the way a single-instance application answers a
+/// second launch. The windowing system decides from the token whether the
+/// window may take focus.
+pub fn activate<T>(id: Id, token: String) -> Task<T> {
+    task::effect(crate::Action::Window(Action::Activate(id, token)))
 }
 
 /// Inhibit (or release) the compositor's global keyboard shortcuts for a window.
