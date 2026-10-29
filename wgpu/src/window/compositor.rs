@@ -187,7 +187,6 @@ impl Compositor {
                 const BLACKLIST: &[wgpu::TextureFormat] = &[
                     wgpu::TextureFormat::Rgb10a2Unorm,
                     wgpu::TextureFormat::Rgb10a2Uint,
-                    wgpu::TextureFormat::Rgba16Float,
                 ];
 
                 let formats = formats.filter(|format| {
