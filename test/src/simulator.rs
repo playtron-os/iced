@@ -1,5 +1,6 @@
 //! Run a simulation of your application without side effects.
 use crate::core;
+use crate::core::animation::SmoothScroll;
 use crate::core::event;
 use crate::core::keyboard;
 use crate::core::mouse;
@@ -68,6 +69,10 @@ where
         };
 
         bundled_fonts_only();
+
+        // Frames here carry the wall clock, so an eased wheel scroll would be
+        // drawn part of the way there.
+        SmoothScroll::set_instant(true);
 
         for font in settings.fonts {
             load_font(font).expect("Font must be valid");
