@@ -797,9 +797,9 @@ impl editor::Editor for Editor {
 
         internal.editor.shape_as_needed(font_system.raw(), false);
 
-        // Shaping only reaches the visible lines. Lay out the ones reset above
-        // between a caret above the viewport and the viewport, which
-        // `selection` measures.
+        // Shaping lays out only the visible lines again. `selection` also
+        // measures the lines between a caret above the viewport and the
+        // viewport, so lay out the ones reset above too.
         let cursor_line = internal.editor.cursor().line;
         let buffer = buffer_mut_from_editor(&mut internal.editor);
 
@@ -1224,7 +1224,10 @@ mod tests {
 
     /// Twenty short lines, one visual line each at any width used here.
     fn twenty_lines() -> String {
-        (0..20).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n")
+        (0..20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn caret(editor: &Editor) -> Point {
