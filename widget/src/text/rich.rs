@@ -245,10 +245,10 @@ where
     /// by the application.
     ///
     /// The runtime drives the selection: a drag that starts where no widget
-    /// takes the press selects across every selectable text it crosses, a
-    /// double or triple click takes a word or a line, shift-click extends,
-    /// and the copy shortcut copies. A click on a link still follows it. The
-    /// highlight takes [`Rich::selection_color`].
+    /// takes the press selects across every selectable text it crosses in the
+    /// scrollable it started in, a double or triple click takes a word or a
+    /// line, shift-click extends, and the copy shortcut copies. A click on a
+    /// link still follows it. The highlight takes [`Rich::selection_color`].
     pub fn selectable(mut self, selectable: bool) -> Self {
         self.selectable_text = selectable;
         self

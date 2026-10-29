@@ -387,7 +387,8 @@ where
                 let status = shell.event_status().merge(overlay_status);
 
                 // Text selection belongs to the runtime: it starts wherever no
-                // widget took the press, and crosses every selectable widget.
+                // widget took the press, and crosses the selectable widgets in
+                // the scrollable it started in.
                 match event {
                     Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                         self.selection.modifiers = *modifiers;
@@ -468,13 +469,15 @@ where
             .collect();
 
         if let Some((start, end)) = reselect {
-            let mut select = operation::selection::select(start, end, self.selection.target);
+            let scope = self.selection_scope(renderer, start);
+            let mut select = operation::selection::select(start, end, self.selection.target, scope);
             self.operate(renderer, &mut select);
             redraw_request = window::RedrawRequest::NextFrame;
         }
 
-        if select_all {
-            self.operate(renderer, &mut operation::selection::select_all());
+        if select_all && let Some(anchor) = self.selection.anchor {
+            let scope = self.selection_scope(renderer, anchor);
+            self.operate(renderer, &mut operation::selection::select_all(scope));
             redraw_request = window::RedrawRequest::NextFrame;
         }
 
@@ -694,6 +697,21 @@ where
                 renderer,
                 operation,
             );
+        }
+    }
+
+    /// Where a selection that starts at `start` may reach.
+    fn selection_scope(
+        &mut self,
+        renderer: &Renderer,
+        start: Point,
+    ) -> operation::selection::Scope {
+        let mut scope = operation::selection::scope(start);
+        self.operate(renderer, &mut operation::black_box(&mut scope));
+
+        match scope.finish() {
+            operation::Outcome::Some(scope) => scope,
+            _ => operation::selection::Scope::default(),
         }
     }
 
