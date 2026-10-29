@@ -47,6 +47,7 @@ def retry_delay(output):
 
 
 def publish_fork(workspace, crates, version, dry_run):
+    index_waits = 0
     while True:
         pending = [c for c in crates if not published(c, version)]
         if not pending:
@@ -67,6 +68,14 @@ def publish_fork(workspace, crates, version, dry_run):
             continue
         if "already exists" in output:
             # The API can trail the index for a moment after a publish.
+            time.sleep(30)
+            continue
+        # A fork published moments ago can be missing from the index cargo resolves against.
+        if "failed to select a version for the requirement `" in output and "-kora = " in output:
+            index_waits += 1
+            if index_waits > 10:
+                raise SystemExit(f"{workspace.name}: a -kora dependency never reached the index")
+            print(f"{workspace.name}: waiting for the index to list a new -kora crate", flush=True)
             time.sleep(30)
             continue
         delay = retry_delay(output)

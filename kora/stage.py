@@ -33,7 +33,7 @@ FORKS = {
         "wgpu-core-deps-apple", "wgpu-core-deps-emscripten",
         "wgpu-core-deps-wasm", "wgpu-core-deps-windows-linux-android",
     ]),
-    "winit": ("0.30.13", ["winit"]),
+    "winit": ("0.30.14", ["winit"]),
     "cryoglyph": ("0.1.1", ["cryoglyph"]),
     "softbuffer": ("0.4.8", ["softbuffer"]),
     "iced": ("0.15.1", [
