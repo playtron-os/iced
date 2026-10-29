@@ -53,6 +53,8 @@ mod image;
 #[cfg(test)]
 mod blur_tests;
 #[cfg(test)]
+mod mesh_tests;
+#[cfg(test)]
 mod opacity_tests;
 
 use buffer::Buffer;
