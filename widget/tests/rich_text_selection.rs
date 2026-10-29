@@ -1,6 +1,6 @@
 //! Rich text marked selectable can be selected with the mouse and copied, with
 //! no state in the application: the runtime drives the selection across every
-//! selectable text it crosses.
+//! selectable text it crosses in the scrollable it started in.
 //!
 //! They need a renderer that measures text, which this crate's tests don't build by
 //! default, so they return early without one. Run them with:
@@ -19,7 +19,7 @@ use iced_test::{Simulator, simulator};
 use iced_widget::core::keyboard::{self, Modifiers};
 use iced_widget::core::text::Span;
 use iced_widget::core::{Element, Event, Point, Theme, mouse};
-use iced_widget::{column, container, rich_text, span};
+use iced_widget::{column, container, rich_text, row, scrollable, span};
 
 type Renderer = iced_renderer::Renderer;
 type Ui<'a> = Simulator<'a, Message, Theme, Renderer>;
@@ -259,4 +259,101 @@ fn a_click_on_a_link_follows_it_and_selects_nothing() {
         ui.into_messages().collect::<Vec<_>>(),
         [Message::Link("docs")]
     );
+}
+
+/// Two scrolling panes side by side: a long text wrapped in a narrow one, and
+/// two bands in a wide one from x = [`PANE`].
+fn panes<'a>() -> Ui<'a> {
+    Simulator::new(row![
+        scrollable(
+            rich_text([span("Alpha beta gamma delta epsilon zeta")])
+                .selectable(true)
+                .on_link_click(Message::Link),
+        )
+        .width(PANE),
+        scrollable(column![
+            band([span("Eta theta")], true),
+            band([span("Iota")], true),
+        ])
+        .width(3.0 * PANE),
+    ])
+}
+
+/// The width of the narrow pane of [`panes`].
+const PANE: f32 = 100.0;
+
+#[test]
+fn a_drag_in_one_scrollable_leaves_the_text_beside_it_alone() {
+    if !measures_text() {
+        return;
+    }
+
+    let mut ui = panes();
+
+    drag(&mut ui, on(0, PANE + 1.0), on(1, 4.0 * PANE - 1.0));
+    shortcut(&mut ui, "c");
+
+    assert_eq!(ui.clipboard(), Some("Eta theta\nIota"));
+}
+
+#[test]
+fn select_all_stays_in_the_scrollable_the_selection_started_in() {
+    if !measures_text() {
+        return;
+    }
+
+    let mut ui = panes();
+
+    click(&mut ui, on(0, PANE + 1.0));
+    shortcut(&mut ui, "a");
+    shortcut(&mut ui, "c");
+
+    assert_eq!(ui.clipboard(), Some("Eta theta\nIota"));
+}
+
+#[test]
+fn a_drag_that_starts_outside_every_scrollable_reaches_into_them() {
+    if !measures_text() {
+        return;
+    }
+
+    let mut ui = Simulator::new(column![
+        band([span("Alpha beta gamma")], true),
+        scrollable(band([span("Delta epsilon")], true)).height(BAND),
+    ]);
+
+    drag(&mut ui, on(0, 1.0), on(1, 1000.0));
+    shortcut(&mut ui, "c");
+
+    assert_eq!(ui.clipboard(), Some("Alpha beta gamma\nDelta epsilon"));
+}
+
+#[test]
+fn text_after_a_scrolled_scrollable_selects_where_it_is_drawn() {
+    if !measures_text() {
+        return;
+    }
+
+    let mut ui = Simulator::new(column![
+        scrollable(column![
+            band([span("Alpha beta gamma")], true),
+            band([span("Delta epsilon")], true),
+        ])
+        .height(BAND),
+        band([span("Omega")], true),
+    ]);
+
+    ui.point_at(on(0, 1.0));
+    let _ = ui.simulate([
+        Event::Mouse(mouse::Event::CursorMoved {
+            position: on(0, 1.0),
+        }),
+        Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Pixels { x: 0.0, y: -BAND },
+        }),
+    ]);
+    drag(&mut ui, on(1, 1.0), on(1, 1000.0));
+    shortcut(&mut ui, "c");
+
+    assert_eq!(ui.clipboard(), Some("Omega"));
 }
