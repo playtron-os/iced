@@ -1085,7 +1085,7 @@ where
                     {
                         renderer.fill_quad(
                             renderer::Quad {
-                                bounds: range,
+                                bounds: range.round(),
                                 ..renderer::Quad::default()
                             },
                             style.selection,

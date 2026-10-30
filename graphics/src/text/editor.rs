@@ -210,12 +210,14 @@ impl editor::Editor for Editor {
                 Selection::Range(regions)
             }
             _ => {
-                let line = buffer
+                // A line laid out again off screen has no layout until it is
+                // shaped: measure it as an empty line rather than panic.
+                let layout = buffer
                     .lines
                     .get(cursor.line)
-                    .expect("Cursor line should be present");
-
-                let layout = line.layout_opt().expect("Line layout should be cached");
+                    .and_then(cosmic_text::BufferLine::layout_opt)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
 
                 let mut lines = layout.iter().enumerate();
 
@@ -722,11 +724,7 @@ impl editor::Editor for Editor {
             .iter()
             .enumerate()
             .find_map(|(i, line)| {
-                let visible_lines = line
-                    .layout_opt()
-                    .as_ref()
-                    .expect("Line layout should be cached")
-                    .len() as i32;
+                let visible_lines = line.layout_opt()?.len() as i32;
 
                 if window > visible_lines {
                     window -= visible_lines;
@@ -798,6 +796,16 @@ impl editor::Editor for Editor {
         }
 
         internal.editor.shape_as_needed(font_system.raw(), false);
+
+        // Shaping lays out only the visible lines again. `selection` also
+        // measures the lines between a caret above the viewport and the
+        // viewport, so lay out the ones reset above too.
+        let cursor_line = internal.editor.cursor().line;
+        let buffer = buffer_mut_from_editor(&mut internal.editor);
+
+        for line in current_line.max(cursor_line)..buffer.scroll().line {
+            let _ = buffer.line_layout(font_system.raw(), line);
+        }
 
         // The lines were laid out again, maybe at new sizes: a cached caret or
         // selection is measured off the old layout.
@@ -1212,5 +1220,62 @@ mod tests {
             Selection::Caret(_) => panic!("everything is selected"),
         }
         assert!((editor.min_bounds().height - (70.0 + LINE_HEIGHT)).abs() < 0.5);
+    }
+
+    /// Twenty short lines, one visual line each at any width used here.
+    fn twenty_lines() -> String {
+        (0..20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn caret(editor: &Editor) -> Point {
+        match editor.selection() {
+            Selection::Caret(at) => at,
+            Selection::Range(_) => panic!("nothing is selected"),
+        }
+    }
+
+    #[test]
+    fn a_caret_above_the_viewport_after_a_highlight() {
+        let mut highlighter = Heading::new(&());
+        let mut editor = Editor::with_text(&twenty_lines());
+        let viewport = Size::new(WIDE, 3.0 * LINE_HEIGHT);
+
+        editor.update(
+            viewport,
+            Font::DEFAULT,
+            Pixels(14.0),
+            LineHeight::Absolute(Pixels(LINE_HEIGHT)),
+            Wrapping::WordOrGlyph,
+            None,
+            &mut highlighter,
+        );
+        editor.perform(Action::Scroll { lines: 10 });
+        editor.update(
+            viewport,
+            Font::DEFAULT,
+            Pixels(14.0),
+            LineHeight::Absolute(Pixels(LINE_HEIGHT)),
+            Wrapping::WordOrGlyph,
+            None,
+            &mut highlighter,
+        );
+
+        // Highlighting from the first line turns the caret's line, above the
+        // viewport, into a heading: it is laid out again, but not shaped.
+        highlighter.change_line(0);
+        editor.highlight(Font::DEFAULT, &mut highlighter, |_| {
+            highlighter::Format::default()
+        });
+
+        let scroll = editor.buffer().scroll();
+        assert_eq!(scroll.line, 10);
+
+        // The heading and nine lines sit between the caret and the viewport.
+        let at = caret(&editor);
+        let expected = -(70.0 + 9.0 * LINE_HEIGHT) - scroll.vertical;
+        assert!((at.y - expected).abs() < 0.5, "{at:?}, expected {expected}");
     }
 }

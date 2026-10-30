@@ -72,6 +72,7 @@ where
                 exit_on_close_request,
                 surface,
                 surface_version,
+                surface_error_at: None,
                 renderer,
                 mouse_interaction: mouse::Interaction::None,
                 redraw_at: None,
@@ -165,6 +166,7 @@ where
     pub mouse_interaction: mouse::Interaction,
     pub surface: C::Surface,
     pub surface_version: u64,
+    pub surface_error_at: Option<Instant>,
     pub renderer: P::Renderer,
     pub redraw_at: Option<Instant>,
     /// When a frame was last asked for and not yet drawn, for the automation door.
