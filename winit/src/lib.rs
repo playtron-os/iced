@@ -2029,6 +2029,19 @@ async fn run_instance<P>(
                                         .broadcast(subscription::Event::SystemThemeChanged(mode));
                                 }
                             }
+                            winit::event::WindowEvent::ActivationTokenDone {
+                                serial,
+                                ref token,
+                            } => {
+                                if let Some(at) = window
+                                    .activation_tokens
+                                    .iter()
+                                    .position(|(asked, _)| *asked == serial)
+                                {
+                                    let (_, channel) = window.activation_tokens.swap_remove(at);
+                                    let _ = channel.send(Some(token.clone().into_raw()));
+                                }
+                            }
                             _ => {}
                         }
 
@@ -3014,6 +3027,80 @@ fn run_action<'a, P, C>(
             window::Action::GainFocus(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
                     window.raw.focus_window();
+                }
+            }
+            window::Action::RequestActivationToken(id, channel) => {
+                let Some(window) = window_manager.get_mut(id) else {
+                    let _ = channel.send(None);
+                    return;
+                };
+                #[cfg(all(
+                    any(feature = "x11", feature = "wayland"),
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                ))]
+                {
+                    use winit::platform::startup_notify::WindowExtStartupNotify;
+                    match window.raw.request_activation_token() {
+                        // Delivered as `ActivationTokenDone`.
+                        Ok(serial) => window.activation_tokens.push((serial, channel)),
+                        Err(_) => {
+                            let _ = channel.send(None);
+                        }
+                    }
+                }
+                #[cfg(not(all(
+                    any(feature = "x11", feature = "wayland"),
+                    any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "netbsd",
+                        target_os = "openbsd",
+                    )
+                )))]
+                {
+                    let _ = window;
+                    let _ = channel.send(None);
+                }
+            }
+            window::Action::Activate(id, token) => {
+                if let Some(window) = window_manager.get_mut(id) {
+                    #[cfg(all(
+                        any(feature = "x11", feature = "wayland"),
+                        any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        )
+                    ))]
+                    {
+                        use winit::platform::startup_notify::WindowExtStartupNotify;
+                        window
+                            .raw
+                            .activate_with_token(winit::window::ActivationToken::from_raw(token));
+                    }
+                    #[cfg(not(all(
+                        any(feature = "x11", feature = "wayland"),
+                        any(
+                            target_os = "linux",
+                            target_os = "dragonfly",
+                            target_os = "freebsd",
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                        )
+                    )))]
+                    {
+                        let _ = token;
+                        window.raw.focus_window();
+                    }
                 }
             }
             window::Action::SetKeyboardShortcutsInhibit(id, inhibit) => {

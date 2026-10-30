@@ -13,6 +13,7 @@ use crate::core::text;
 use crate::core::theme;
 use crate::core::time::Instant;
 use crate::core::{Color, InputMethod, Padding, Point, Rectangle, Size, Text, Vector};
+use crate::futures::futures::channel::oneshot;
 use crate::graphics::Compositor;
 use crate::program::{self, Program};
 use crate::runtime::window::raw_window_handle;
@@ -81,6 +82,7 @@ where
                 preedit: None,
                 ime_state: None,
                 ime_surrounding: None,
+                activation_tokens: Vec::new(),
             },
         );
 
@@ -175,6 +177,11 @@ where
     preedit: Option<Preedit<P::Renderer>>,
     ime_state: Option<(Rectangle, input_method::Purpose)>,
     ime_surrounding: Option<input_method::Surrounding>,
+    /// Activation tokens asked of the windowing system and not yet delivered.
+    pub activation_tokens: Vec<(
+        winit::event_loop::AsyncRequestSerial,
+        oneshot::Sender<Option<String>>,
+    )>,
 }
 
 impl<P, C> Window<P, C>
