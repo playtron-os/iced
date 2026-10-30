@@ -39,7 +39,7 @@ struct Markdown {
 
 enum Mode {
     Preview,
-    Stream { pending: String },
+    Stream { content: String, offset: usize },
 }
 
 enum Image {
@@ -143,7 +143,8 @@ impl Markdown {
                     self.content = markdown::Content::new();
 
                     self.mode = Mode::Stream {
-                        pending: self.raw.text(),
+                        content: self.raw.text(),
+                        offset: 0,
                     };
 
                     operation::snap_to_end("preview")
@@ -168,17 +169,12 @@ impl Markdown {
             Message::NextToken => {
                 match &mut self.mode {
                     Mode::Preview => {}
-                    Mode::Stream { pending } => {
-                        if pending.is_empty() {
+                    Mode::Stream { content, offset } => {
+                        if *offset >= content.len() {
                             self.mode = Mode::Preview;
-                        } else {
-                            let mut tokens = pending.split(' ');
-
-                            if let Some(token) = tokens.next() {
-                                self.content.push_str(&format!("{token} "));
-                            }
-
-                            *pending = tokens.collect::<Vec<_>>().join(" ");
+                        } else if let Some(token) = content[*offset..].chars().next() {
+                            self.content.push_str(&token.to_string());
+                            *offset += token.len_utf8();
                         }
                     }
                 }
@@ -241,7 +237,7 @@ impl Markdown {
     fn subscription(&self) -> Subscription<Message> {
         let listen_stream = match self.mode {
             Mode::Preview => Subscription::none(),
-            Mode::Stream { .. } => time::every(milliseconds(10)).map(|_| Message::NextToken),
+            Mode::Stream { .. } => time::every(milliseconds(5)).map(|_| Message::NextToken),
         };
 
         let animate = {

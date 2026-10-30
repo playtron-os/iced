@@ -51,3 +51,7 @@ iced_highlighter.optional = true
 
 [dev-dependencies]
 iced_test.workspace = true
+
+iced_widget.workspace = true
+# The selectable markdown view draws images
+iced_widget.features = ["image", "markdown"]
