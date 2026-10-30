@@ -584,6 +584,62 @@ pub mod font {
     //! Load and use fonts.
     pub use crate::core::font::*;
     pub use crate::runtime::font::*;
+
+    use crate::Task;
+
+    /// Lists all the available font families in the system.
+    ///
+    /// Every renderer shares one font system, so this reads it directly
+    /// instead of going through the shell.
+    pub fn list() -> Task<Result<Vec<Family>, Error>> {
+        Task::future(async {
+            let font_system = crate::graphics::text::font_system()
+                .read()
+                .expect("Read from font system");
+
+            let families = std::collections::BTreeSet::from_iter(font_system.families());
+
+            Ok(families.into_iter().map(Family::name).collect())
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::futures::StreamExt;
+        use crate::futures::task::{Context, Poll, noop_waker};
+        use crate::runtime::{Action, task};
+
+        const GEIST: &[u8] =
+            include_bytes!("../examples/letter_spacing/fonts/Geist-Regular.ttf").as_slice();
+
+        #[test]
+        fn list_names_each_loaded_family_once() {
+            crate::graphics::text::font_system()
+                .write()
+                .expect("Write to font system")
+                .load_font(GEIST.into());
+
+            let mut stream = task::into_stream(list()).expect("a task that runs");
+            let waker = noop_waker();
+            let mut context = Context::from_waker(&waker);
+
+            // The task yields once to the executor before it lists.
+            let families = loop {
+                match stream.poll_next_unpin(&mut context) {
+                    Poll::Ready(Some(Action::Output(families))) => break families.expect("a list"),
+                    Poll::Ready(_) => panic!("the task ended without a list"),
+                    Poll::Pending => {}
+                }
+            };
+
+            assert!(families.contains(&Family::Name("Geist")));
+            assert!(families.contains(&Family::Name("Iced-Icons")));
+
+            let names: Vec<String> = families.iter().map(ToString::to_string).collect();
+            assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+        }
+    }
 }
 
 pub mod event {
