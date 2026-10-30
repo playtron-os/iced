@@ -2,6 +2,9 @@
 use crate::time::{Duration, Instant};
 
 pub use lilt::{Easing, FloatRepresentable as Float, Interpolable};
+pub use smooth_scroll::SmoothScroll;
+
+mod smooth_scroll;
 
 /// The animation of some particular state.
 ///

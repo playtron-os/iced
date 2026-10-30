@@ -21,7 +21,7 @@
 //! ```
 use crate::container;
 use crate::core::alignment;
-use crate::core::animation::Easing;
+use crate::core::animation::{Easing, SmoothScroll};
 use crate::core::border::{self, Border};
 use crate::core::keyboard;
 use crate::core::layout;
@@ -76,6 +76,7 @@ where
     height: Length,
     direction: Direction,
     auto_scroll: bool,
+    smooth_scroll: bool,
     content: Element<'a, Message, Theme, Renderer>,
     on_scroll: Option<Box<dyn Fn(Viewport) -> Message + 'a>>,
     ensure_focused_visible: Option<EnsureVisibleConfig>,
@@ -104,6 +105,7 @@ where
             height: Length::Shrink,
             direction: direction.into(),
             auto_scroll: false,
+            smooth_scroll: true,
             content: content.into(),
             on_scroll: None,
             ensure_focused_visible: None,
@@ -230,6 +232,16 @@ where
     /// By default, it is disabled.
     pub fn auto_scroll(mut self, auto_scroll: bool) -> Self {
         self.auto_scroll = auto_scroll;
+        self
+    }
+
+    /// Sets whether a mouse wheel scrolls smoothly, easing each notch in over a
+    /// few frames as a browser does, instead of jumping.
+    ///
+    /// Touchpads report pixel deltas that are already smooth; those always
+    /// scroll at once. By default, it is enabled.
+    pub fn smooth_scroll(mut self, smooth_scroll: bool) -> Self {
+        self.smooth_scroll = smooth_scroll;
         self
     }
 
@@ -646,6 +658,18 @@ where
         }
 
         let mut update = || {
+            // Stepped before the content sees the frame, so it gets this frame's translation.
+            if let Event::Window(window::Event::RedrawRequested(now)) = event {
+                if state.step_wheel(*now, bounds, content_bounds) {
+                    let _ = notify_scroll(state, &self.on_scroll, bounds, content_bounds, shell);
+                }
+
+                // Asked for on every pass of a frame, which may deliver its instant more than once.
+                if state.is_wheel_easing() {
+                    shell.request_redraw();
+                }
+            }
+
             if let Some(scroller_grabbed_at) = state.y_scroller_grabbed_at() {
                 match event {
                     Event::Mouse(mouse::Event::CursorMoved { .. })
@@ -844,7 +868,7 @@ where
                         return;
                     }
 
-                    let delta = match *delta {
+                    let (delta, is_lines) = match *delta {
                         mouse::ScrollDelta::Lines { x, y } => {
                             let is_shift_pressed = state.keyboard_modifiers.shift();
 
@@ -861,21 +885,31 @@ where
                                 Vector::new(y, x)
                             };
 
-                            // TODO: Configurable speed/friction (?)
-                            -movement * 60.0
+                            (-movement * SmoothScroll::LINE, true)
                         }
-                        mouse::ScrollDelta::Pixels { x, y } => -Vector::new(x, y),
+                        // Touchpads already scroll smoothly; easing them again would lag.
+                        mouse::ScrollDelta::Pixels { x, y } => (-Vector::new(x, y), false),
                     };
 
-                    state.scroll(self.direction.align(delta), bounds, content_bounds);
+                    let delta = self.direction.align(delta);
+
+                    if self.smooth_scroll && is_lines {
+                        state.scroll_smoothly(delta, bounds, content_bounds);
+                    } else {
+                        state.scroll(delta, bounds, content_bounds);
+                    }
 
                     let has_scrolled =
                         notify_scroll(state, &self.on_scroll, bounds, content_bounds, shell);
 
-                    let in_transaction = state.last_scrolled.is_some();
+                    let in_transaction = state.last_scrolled.is_some() || state.is_wheel_easing();
 
                     if has_scrolled || in_transaction {
                         shell.capture_event();
+                    }
+
+                    if state.is_wheel_easing() {
+                        shell.request_redraw();
                     }
                 }
                 Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle))
@@ -1040,17 +1074,25 @@ where
                     let _ = notify_viewport(state, &self.on_scroll, bounds, content_bounds, shell);
 
                     // Drive scroll animation
-                    if let Some(anim) = state.scroll_animation {
-                        let elapsed = now.duration_since(anim.start).as_secs_f32();
-                        let t = (elapsed / anim.duration_secs).min(1.0);
-                        let eased = anim.easing.value(t);
+                    if let Some(ActiveScrollAnimation::Eased {
+                        from_x,
+                        from_y,
+                        to,
+                        start,
+                        duration_secs,
+                        easing,
+                    }) = state.scroll_animation
+                    {
+                        let elapsed = now.duration_since(start).as_secs_f32();
+                        let t = (elapsed / duration_secs).min(1.0);
+                        let eased = easing.value(t);
 
-                        if let Some(target_y) = anim.to.y {
-                            let y = anim.from_y + (target_y - anim.from_y) * eased;
+                        if let Some(target_y) = to.y {
+                            let y = from_y + (target_y - from_y) * eased;
                             state.offset_y = Offset::Absolute(y);
                         }
-                        if let Some(target_x) = anim.to.x {
-                            let x = anim.from_x + (target_x - anim.from_x) * eased;
+                        if let Some(target_x) = to.x {
+                            let x = from_x + (target_x - from_x) * eased;
                             state.offset_x = Offset::Absolute(x);
                         }
 
@@ -1596,13 +1638,18 @@ struct State {
 
 /// A running scroll animation driven by `RedrawRequested` events.
 #[derive(Debug, Clone, Copy)]
-struct ActiveScrollAnimation {
-    from_x: f32,
-    from_y: f32,
-    to: AbsoluteOffset<Option<f32>>,
-    start: Instant,
-    duration_secs: f32,
-    easing: Easing,
+enum ActiveScrollAnimation {
+    /// A programmatic scroll, from `scroll_to_animated`.
+    Eased {
+        from_x: f32,
+        from_y: f32,
+        to: AbsoluteOffset<Option<f32>>,
+        start: Instant,
+        duration_secs: f32,
+        easing: Easing,
+    },
+    /// A mouse wheel easing toward where its notches add up to.
+    Wheel(SmoothScroll),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1640,7 +1687,6 @@ impl operation::Scrollable for State {
     }
 
     fn scroll_to(&mut self, offset: AbsoluteOffset<Option<f32>>) {
-        self.scroll_animation = None;
         State::scroll_to(self, offset);
     }
 
@@ -1662,7 +1708,7 @@ impl operation::Scrollable for State {
             Offset::Relative(_) => 0.0,
         };
 
-        self.scroll_animation = Some(ActiveScrollAnimation {
+        self.scroll_animation = Some(ActiveScrollAnimation::Eased {
             from_x,
             from_y,
             to: offset,
@@ -1760,6 +1806,8 @@ impl State {
     }
 
     fn scroll(&mut self, delta: Vector<f32>, bounds: Rectangle, content_bounds: Rectangle) {
+        self.scroll_animation = None;
+
         if bounds.height < content_bounds.height {
             self.offset_y = Offset::Absolute(
                 (self.offset_y.absolute(bounds.height, content_bounds.height) + delta.y)
@@ -1775,17 +1823,99 @@ impl State {
         }
     }
 
+    /// Moves the wheel's target by `delta` and eases toward it on the next
+    /// frames, picking up a running wheel animation where it is.
+    fn scroll_smoothly(
+        &mut self,
+        delta: Vector<f32>,
+        bounds: Rectangle,
+        content_bounds: Rectangle,
+    ) {
+        let mut wheel = match self.scroll_animation {
+            Some(ActiveScrollAnimation::Wheel(wheel)) => wheel,
+            _ => SmoothScroll::new(),
+        };
+
+        let position = self.absolute(bounds, content_bounds);
+        let shown = wheel.scroll_by(
+            position,
+            delta,
+            Self::max_offset(bounds, content_bounds),
+            Instant::now(),
+        );
+
+        let _ = self.show(shown, position);
+        self.scroll_animation = wheel
+            .is_animating()
+            .then_some(ActiveScrollAnimation::Wheel(wheel));
+    }
+
+    /// Advances a wheel animation to the frame at `now`. Returns whether the
+    /// offsets moved.
+    fn step_wheel(&mut self, now: Instant, bounds: Rectangle, content_bounds: Rectangle) -> bool {
+        let Some(ActiveScrollAnimation::Wheel(mut wheel)) = self.scroll_animation else {
+            return false;
+        };
+
+        let position = self.absolute(bounds, content_bounds);
+        let shown = wheel
+            .step(now, Self::max_offset(bounds, content_bounds))
+            .unwrap_or(position);
+
+        self.scroll_animation = wheel
+            .is_animating()
+            .then_some(ActiveScrollAnimation::Wheel(wheel));
+
+        self.show(shown, position)
+    }
+
+    fn is_wheel_easing(&self) -> bool {
+        matches!(self.scroll_animation, Some(ActiveScrollAnimation::Wheel(_)))
+    }
+
+    fn absolute(&self, bounds: Rectangle, content_bounds: Rectangle) -> Vector {
+        Vector::new(
+            self.offset_x.absolute(bounds.width, content_bounds.width),
+            self.offset_y.absolute(bounds.height, content_bounds.height),
+        )
+    }
+
+    fn max_offset(bounds: Rectangle, content_bounds: Rectangle) -> Vector {
+        Vector::new(
+            (content_bounds.width - bounds.width).max(0.0),
+            (content_bounds.height - bounds.height).max(0.0),
+        )
+    }
+
+    /// Moves to the absolute `offset` on each axis where it differs from
+    /// `position`, keeping a snapped axis that did not move snapped.
+    fn show(&mut self, offset: Vector, position: Vector) -> bool {
+        if offset.x != position.x {
+            self.offset_x = Offset::Absolute(offset.x);
+        }
+
+        if offset.y != position.y {
+            self.offset_y = Offset::Absolute(offset.y);
+        }
+
+        offset != position
+    }
+
     fn scroll_y_to(&mut self, percentage: f32, bounds: Rectangle, content_bounds: Rectangle) {
+        self.scroll_animation = None;
         self.offset_y = Offset::Relative(percentage.clamp(0.0, 1.0));
         self.unsnap(bounds, content_bounds);
     }
 
     fn scroll_x_to(&mut self, percentage: f32, bounds: Rectangle, content_bounds: Rectangle) {
+        self.scroll_animation = None;
         self.offset_x = Offset::Relative(percentage.clamp(0.0, 1.0));
         self.unsnap(bounds, content_bounds);
     }
 
     fn snap_to(&mut self, offset: RelativeOffset<Option<f32>>) {
+        self.scroll_animation = None;
+
         if let Some(x) = offset.x {
             self.offset_x = Offset::Relative(x.clamp(0.0, 1.0));
         }
@@ -1796,6 +1926,8 @@ impl State {
     }
 
     fn scroll_to(&mut self, offset: AbsoluteOffset<Option<f32>>) {
+        self.scroll_animation = None;
+
         if let Some(x) = offset.x {
             self.offset_x = Offset::Absolute(x.max(0.0));
         }
