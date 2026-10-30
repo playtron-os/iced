@@ -44,6 +44,7 @@ use crate::core::text::highlighter::{self, Highlighter};
 use crate::core::text::{self, LineHeight, Text, Wrapping};
 use crate::core::theme;
 use crate::core::time::{Duration, Instant};
+use crate::core::touch;
 use crate::core::widget::operation;
 use crate::core::widget::{self, Widget};
 use crate::core::window;
@@ -1377,6 +1378,39 @@ impl<Message> Update<Message> {
                     }))
                 }
                 _ => None,
+            },
+            // A finger acts like the left mouse button, at its own position.
+            Event::Touch(event) => match event {
+                touch::Event::FingerPressed { position, .. } => {
+                    if bounds.contains(*position) {
+                        let click = mouse::Click::new(
+                            *position
+                                - Vector::new(bounds.x + padding.left, bounds.y + padding.top),
+                            mouse::Button::Left,
+                            state.last_click,
+                        );
+
+                        Some(Update::Click(click))
+                    } else if state.focus.is_some() {
+                        binding(Binding::Unfocus)
+                    } else {
+                        None
+                    }
+                }
+                touch::Event::FingerLifted { .. } | touch::Event::FingerLost { .. } => {
+                    Some(Update::Release)
+                }
+                touch::Event::FingerMoved { position, .. } => match state.drag_click {
+                    Some(mouse::click::Kind::Single) => {
+                        let relative_position = Point::new(
+                            (position.x - bounds.x).max(0.0).min(bounds.width),
+                            (position.y - bounds.y).max(0.0).min(bounds.height),
+                        ) - Vector::new(padding.left, padding.top);
+
+                        Some(Update::Drag(relative_position))
+                    }
+                    _ => None,
+                },
             },
             Event::InputMethod(event) => match event {
                 input_method::Event::Opened | input_method::Event::Closed => Some(
